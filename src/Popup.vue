@@ -75,7 +75,7 @@ async function openSettings() {
               </span>
             </div>
             <span class="small muted">
-              {{ rule.options.merge ? 'Fensterübergreifend' : 'Je Fenster' }}
+              {{ rule.options.merge ? 'Fensterübergreifend' : 'Im Fenster bleiben' }}
             </span>
           </li>
         </ol>

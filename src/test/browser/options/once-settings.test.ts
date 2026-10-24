@@ -58,6 +58,16 @@ test('preview applies title exclusions and first-match order, including the catc
   await expect(page.locator('.preview-result')).toContainText('Default')
   await page.getByRole('button', { name: 'Änderungen verwerfen' }).click()
   await expect(page.locator('.inline-warning')).toHaveCount(0)
+  await page
+    .getByLabel('Adresse des neuen Tabs', { exact: true })
+    .fill('chrome://newtab/')
+  await expect(page.locator('.preview-result')).toContainText(
+    'Wartet auf den ersten Seitenaufruf',
+  )
+  await page
+    .getByLabel('Adresse des neuen Tabs', { exact: true })
+    .fill('https://chatgpt.com/')
+  await expect(page.locator('.preview-result')).toContainText('GPT')
 })
 
 test('validates new rules and retains a custom rule after saving and reloading', async ({

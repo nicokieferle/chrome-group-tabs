@@ -4,6 +4,8 @@ Persönlicher MIT-lizenzierter Fork von [loilo/auto-group-tabs](https://github.c
 
 ## Einstellungen ab Version 0.2.0
 
+Version **0.2.2** verhindert zusätzliche Gruppenkopien durch neue Fenster. Leere Tabs warten auf den ersten Seitenaufruf. Jede Regel bindet sich innerhalb der Browsersitzung an eine feste native Gruppen-ID, getrennt für normale und private Fenster. Die Fensteroption steuert das Verschieben zur Zielgruppe; sie legt keine weiteren Gruppen pro Fenster mehr an. Bereits vorhandene doppelte Gruppen werden nicht automatisch zusammengeführt.
+
 Version **0.2.1** korrigiert zusätzlich die Zuordnung des Tabs, der einen schlafenden Hintergrundprozess aufweckt. Dieser neue Tab darf beim Aufwachen nicht versehentlich als bereits verarbeiteter Bestand geschützt werden. Der Neustartschutz bleibt unverändert.
 
 Popup und Einstellungsseite wurden für den Once-Ablauf neu aufgebaut. Die Oberfläche ist durchgehend deutsch. Die frühere Regelerstellung im Popup, „Exakt“, verschachtelte Originaldialoge und „Neu laden erzwingen“ werden nicht mehr verwendet. Die vorhandenen Komponenten des Originals gehören nicht mehr zum Oberflächen-Einstiegspunkt.
@@ -21,20 +23,22 @@ Bereits gespeicherte Gruppen, IDs, Farben, Muster, Titel-Ausnahmen und Fensterop
 
 ## Standardverhalten
 
-1. Neue ChatGPT-Tabs (`https://chatgpt.com/*`, `https://chat.openai.com/*`) kommen in **GPT**. Eine bestehende Gruppe wird anhand ihres Namens verwendet; die GPT-Standardregel darf sie auch in einem anderen normalen Fenster finden.
-2. Alle anderen neuen Tabs, auch leere Tabs, kommen in **Default** im jeweiligen Fenster.
-3. URL und Titel werden nach dem ersten Laden geprüft, sobald sie kurz stabil sind; bei dauerhaftem Laden spätestens nach zwölf Sekunden.
-4. Danach wird der Tab nicht erneut einsortiert. Auch ein zunächst leerer Tab in Default bleibt dort, wenn später ChatGPT darin geöffnet wird.
+1. Neue ChatGPT-Tabs (`https://chatgpt.com/*`, `https://chat.openai.com/*`) kommen in **GPT**. Die GPT-Standardregel darf neue Tabs dafür auch in ein anderes normales Fenster verschieben.
+2. Alle anderen neuen Seiten werden **Default** zugeordnet. Die Default-Standardregel lässt Tabs in ihrem Fenster. Liegt die feste Default-Gruppe in einem anderen Fenster, bleibt der Tab ohne neue Zuordnung hier; es entsteht keine zweite Default-Gruppe. Für eine gemeinsame Default-Gruppe samt Tab-Verschiebung „Bestehende Gruppe auch in anderen Fenstern“ wählen und speichern.
+3. Leere Tabs (`chrome://newtab/`, `about:blank` oder noch ohne Adresse) erzeugen keine Gruppe und werden nicht in ein anderes Fenster verschoben. Sie warten auch über das Einschlafen des Hintergrundprozesses hinweg auf den ersten Seitenaufruf.
+4. URL und Titel werden nach dem ersten Laden geprüft, sobald sie kurz stabil sind; bei dauerhaftem Laden spätestens zwölf Sekunden nach der ersten Zieladresse. Danach wird der Tab nicht erneut einsortiert. Spätere Navigation und manuelles Verschieben bleiben unverändert.
 
 Eine Titel-Ausnahme greift, wenn der **erste Tabtitel** einen eingetragenen Begriff enthält, unabhängig von Groß-/Kleinschreibung. Dann wird die nächste Regel geprüft. Es geht nicht um Lesezeichen- oder Gruppennamen. Ein Titel, den die Website später ändert, wird nicht erneut geprüft.
 
-Fensterübergreifende Zuordnung verschiebt einen passenden neuen Tab bei Bedarf zur vorhandenen Gruppe. Normale und private Fenster werden nicht vermischt. Angeheftete Tabs, Split-Views und Popup-Fenster bleiben unverändert. Eine vorhandene Gruppe behält ihre Farbe; die konfigurierte Farbe gilt beim Anlegen einer neuen Gruppe.
+Jede Regel verwendet eine feste Zielgruppe pro normalem bzw. privatem Kontext. Beim ersten Zuordnen wird eine vorhandene Gruppe anhand ihres Namens gewählt, bevorzugt mit der konfigurierten Farbe. Danach bleibt ihre ID maßgeblich, auch nach manuellem Umbenennen, Farbwechsel, Verschieben der Gruppe oder Einschlafen des Hintergrundprozesses. Eine gleichnamige Gruppe im Quellfenster ersetzt diese Bindung nicht. Fehlt die Zielgruppe, wird eine passende vorhandene Gruppe gewählt oder eine neue angelegt. Eine ausdrücklich geänderte Zielgruppenbezeichnung in der Regel löst die alte Bindung.
+
+Fensterübergreifende Zuordnung verschiebt einen passenden neuen Tab bei Bedarf zur festen Zielgruppe. „Im Fenster bleiben (keine Gruppenkopie)“ lässt den Tab ohne neue Zuordnung, wenn die Zielgruppe anderswo liegt. Normale und private Fenster werden nicht vermischt. Angeheftete Tabs, Split-Views und Popup-Fenster bleiben unverändert. Eine vorhandene Gruppe behält ihre Farbe; die konfigurierte Farbe gilt beim Anlegen einer neuen Gruppe. Bestehende Duplikate und manuelle Gruppierungen bleiben erhalten.
 
 ## Neustartschutz
 
 Chrome meldet auch wiederhergestellte Tabs über `tabs.onCreated`. Der Hintergrund schützt deshalb die Startphase, bis drei Sekunden lang kein weiterer Tab erstellt wurde. Während dieser Phase selbst neu geöffnete Tabs bleiben ebenfalls unverändert. Bereits verworfene oder nicht geladene Wiederherstellungstabs bleiben auch bei späteren Meldungen geschützt.
 
-Tab- und Gruppen-IDs gelten nur innerhalb einer Browsersitzung. Nach einem vollständigen Neustart bleibt die von Chrome wiederhergestellte Gruppierung maßgeblich; alte numerische IDs werden nicht weiterverwendet. Ein ungewöhnlich spät wiederhergestellter, bereits geladener Tab ist von einem tatsächlich neuen Tab nicht sicher unterscheidbar. Die Pause ist keine dauerhafte Identitätsgarantie. Es werden keine Gruppen oder Tabs aus eigenen Kopien wiederhergestellt.
+Tab- und Gruppen-IDs gelten nur innerhalb einer Browsersitzung. Nach einem vollständigen Neustart bleibt die von Chrome wiederhergestellte Gruppierung maßgeblich; alte numerische IDs und Zielgruppen-Bindungen werden nicht weiterverwendet. Neue Zuordnungen finden die Zielgruppe wieder anhand des konfigurierten Namens. Ein ungewöhnlich spät wiederhergestellter, bereits geladener Tab ist von einem tatsächlich neuen Tab nicht sicher unterscheidbar. Die Pause ist keine dauerhafte Identitätsgarantie. Es werden keine Gruppen oder Tabs aus eigenen Kopien wiederhergestellt.
 
 ## Installation und Update
 
@@ -46,7 +50,7 @@ Tab- und Gruppen-IDs gelten nur innerhalb einer Browsersitzung. Nach einem volls
 
 ## Berechtigungen und Daten
 
-Unverändert: `tabs`, `tabGroups`, `storage`. Keine zusätzlichen Berechtigungen, Host-Freigaben oder Content-Skripte. Die neue Oberfläche verwendet keine externen Dienste, Schriftserver oder Netzwerkanfragen. Regeln liegen weiterhin komprimiert in Chrome-Sync; der Sitzungsstatus enthält Tab-IDs und den Startschutz, keine URLs oder Titel. Die vorhandene MIT-Lizenz bleibt erhalten.
+Unverändert: `tabs`, `tabGroups`, `storage`. Keine zusätzlichen Berechtigungen, Host-Freigaben oder Content-Skripte. Die neue Oberfläche verwendet keine externen Dienste, Schriftserver oder Netzwerkanfragen. Regeln liegen weiterhin komprimiert in Chrome-Sync; der Sitzungsstatus enthält Tab-IDs, Zielgruppen-IDs mit konfigurierten Gruppennamen und den Startschutz, keine URLs oder Seitentitel. Die vorhandene MIT-Lizenz bleibt erhalten.
 
 ## Entwicklung und Prüfung
 

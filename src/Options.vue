@@ -3,6 +3,7 @@ import { computed, onMounted, onScopeDispose, ref } from 'vue'
 import Layout from './Layout.vue'
 import OnceRuleEditor from './components/OnceRuleEditor.vue'
 import manifest from './manifest/manifest.base'
+import { isNewTabPlaceholder } from './util/once-router'
 import { useOnceSettings } from './composables/use-once-settings'
 import {
   defaultDrafts,
@@ -227,6 +228,10 @@ function restoreDefaults() {
                   <template v-else-if="preview.error">
                     <span class="muted">{{ preview.error }}</span>
                   </template>
+                  <template v-else-if="isNewTabPlaceholder(testUrl.trim())">
+                    <strong>Wartet auf den ersten Seitenaufruf</strong>
+                    <span class="muted">Ein leerer Tab erzeugt keine Gruppe.</span>
+                  </template>
                   <template v-else-if="preview.rule">
                     <span class="muted">Zielgruppe</span>
                     <strong>
@@ -240,7 +245,7 @@ function restoreDefaults() {
                       {{
                         preview.rule.options.merge
                           ? 'Bestehende Gruppe auch in anderen Fenstern verwenden.'
-                          : 'Gruppe im Fenster des neuen Tabs verwenden.'
+                          : 'Liegt die Zielgruppe in einem anderen Fenster, bleibt der Tab hier ohne neue Zuordnung.'
                       }}
                     </span>
                   </template>
@@ -254,13 +259,14 @@ function restoreDefaults() {
               <section class="help-panel" aria-labelledby="behavior-heading">
                 <h3 id="behavior-heading">So arbeitet Once</h3>
                 <p>
-                  URL und Titel werden nur beim ersten Öffnen geprüft. Spätere
-                  Navigation und manuelles Verschieben lösen keine neue Zuordnung
-                  aus.
+                  Leere neue Tabs warten auf den ersten Seitenaufruf. Dann werden URL
+                  und Titel einmal geprüft. Spätere Navigation und manuelles
+                  Verschieben lösen keine neue Zuordnung aus.
                 </p>
                 <p>
-                  Geänderte Regeln gelten für neue Tabs. Bestehende Gruppen werden
-                  dadurch nicht umbenannt.
+                  Jede Regel nutzt eine feste Zielgruppe. Weitere Fenster legen keine
+                  Kopie davon an. Geänderte Regeln gelten für neue Tabs. Bestehende
+                  Gruppen werden dadurch nicht umbenannt.
                 </p>
                 <p>
                   Beim Chrome-Start schützt eine kurze Pause die wiederhergestellten

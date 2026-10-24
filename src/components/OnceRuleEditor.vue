@@ -115,7 +115,8 @@ const colorNames = {
         <p class="field-help">
           Ein Muster pro Zeile.
           <code>*</code>
-          passt auf alle Adressen, auch leere neue Tabs.
+          passt auf alle Zieladressen. Leere neue Tabs warten auf den ersten
+          Seitenaufruf.
         </p>
       </div>
       <p v-if="catchAll && position < total" class="inline-warning">
@@ -142,12 +143,14 @@ const colorNames = {
         <div>
           <label :for="`${rule.id}-windows`">Fensterzuordnung</label>
           <select :id="`${rule.id}-windows`" v-model="rule.merge">
-            <option :value="false">Im Fenster des neuen Tabs</option>
+            <option :value="false">Im Fenster bleiben (keine Gruppenkopie)</option>
             <option :value="true">Bestehende Gruppe auch in anderen Fenstern</option>
           </select>
           <p class="field-help">
-            Eine vorhandene Gruppe mit gleichem Namen wird verwendet. Fehlt sie, wird
-            sie angelegt. Bestehende Gruppen behalten ihre Farbe.
+            Jede Regel nutzt eine feste Zielgruppe. Liegt sie in einem anderen
+            Fenster, wechselt der Tab dorthin oder bleibt ohne neue Zuordnung in
+            seinem Fenster. Es entsteht keine Gruppenkopie. Bestehende Gruppen
+            behalten ihre Farbe.
           </p>
         </div>
       </div>
