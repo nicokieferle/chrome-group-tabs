@@ -14,6 +14,14 @@ export default defineConfig({
   use: {
     actionTimeout: 0,
     trace: 'on-first-retry',
+    launchOptions: process.env.PW_CHROMIUM_EXECUTABLE_PATH
+      ? {
+          executablePath: process.env.PW_CHROMIUM_EXECUTABLE_PATH,
+          args: process.env.PW_CHROMIUM_ARGS
+            ? (JSON.parse(process.env.PW_CHROMIUM_ARGS) as string[])
+            : undefined,
+        }
+      : undefined,
   },
   projects: [
     {

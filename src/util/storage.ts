@@ -2,11 +2,8 @@
  * Promisified storage reading.
  * Uses Chrome storage API if available, falls back to localStorage.
  */
-export async function readStorage(
-  key: string,
-  storage: chrome.storage.AreaName,
-) {
-  if (typeof chrome.storage === 'undefined') {
+export async function readStorage(key: string, storage: chrome.storage.AreaName) {
+  if (typeof globalThis.chrome?.storage === 'undefined') {
     const result = window.localStorage.getItem(key)
     return result ? JSON.parse(result) : undefined
   } else {
@@ -14,10 +11,7 @@ export async function readStorage(
   }
 }
 
-export type WatchStorageCallback<T> = (
-  newValue: T,
-  oldValue: T | undefined,
-) => void
+export type WatchStorageCallback<T> = (newValue: T, oldValue: T | undefined) => void
 
 /**
  * Watch a storage key for changes.
@@ -28,7 +22,7 @@ export function watchStorage<T = any>(
   callback: WatchStorageCallback<T>,
   storage: chrome.storage.AreaName = 'sync',
 ) {
-  if (typeof chrome.storage === 'undefined') {
+  if (typeof globalThis.chrome?.storage === 'undefined') {
     const handler = (event: StorageEvent) => {
       if (event.storageArea !== window.localStorage) return
       if (event.key !== key) return
@@ -70,27 +64,24 @@ export async function writeStorage<T = any>(
   value: T,
   storage: chrome.storage.AreaName = 'sync',
 ) {
-  return await new Promise<void>(resolve => {
-    if (typeof chrome.storage === 'undefined') {
-      const oldValue = window.localStorage.getItem(key)
-      const newValue = JSON.stringify(value)
+  if (typeof globalThis.chrome?.storage === 'undefined') {
+    const oldValue = window.localStorage.getItem(key)
+    const newValue = JSON.stringify(value)
 
-      // localStorage fallback for testing outside an extension
-      window.localStorage.setItem(key, newValue)
+    // localStorage fallback for testing outside an extension
+    window.localStorage.setItem(key, newValue)
 
-      // Create artifical 'storage' events to get parity with chrome storage events
-      window.dispatchEvent(
-        new StorageEvent('storage', {
-          key,
-          newValue,
-          oldValue,
-          storageArea: window.localStorage,
-          url: window.location.href,
-        }),
-      )
-      resolve()
-    } else {
-      chrome.storage[storage].set({ [key]: value }, () => resolve())
-    }
-  })
+    // Create artifical 'storage' events to get parity with chrome storage events
+    window.dispatchEvent(
+      new StorageEvent('storage', {
+        key,
+        newValue,
+        oldValue,
+        storageArea: window.localStorage,
+        url: window.location.href,
+      }),
+    )
+  } else {
+    await chrome.storage[storage].set({ [key]: value })
+  }
 }

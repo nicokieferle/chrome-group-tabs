@@ -24,7 +24,7 @@
   },
   "wireit": {
     "dev": {
-      "command": "vite -c vite.chromium.config.ts --host",
+      "command": "vite -c vite.chromium.config.ts --host 127.0.0.1",
       "service": true,
       "files": [
         "src/**/*",

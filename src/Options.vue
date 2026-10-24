@@ -1,416 +1,389 @@
 <script setup lang="ts">
-import EditDialog from './components/Dialog/EditDialog.vue'
-import SettingsDialog from './components/Dialog/SettingsDialog.vue'
-import Group from './components/Group.vue'
-import Snackbar from './components/Snackbar.vue'
-import SlideVertical from './components/Util/SlideVertical.vue'
+import { computed, onMounted, onScopeDispose, ref } from 'vue'
 import Layout from './Layout.vue'
-
-import { until, useDebounceFn, useStyleTag } from '@vueuse/core'
-import { inject, nextTick, onMounted, ref, useTemplateRef, watch } from 'vue'
-import Draggable from 'vuedraggable'
-
+import OnceRuleEditor from './components/OnceRuleEditor.vue'
+import manifest from './manifest/manifest.base'
+import { useOnceSettings } from './composables/use-once-settings'
 import {
-  useGroupConfigurations,
-  useStorage,
-  useSyncedCopy,
-} from '@/composables'
-import { useViewStore } from '@/stores'
-import { saveGroupConfigurations } from '@/util/group-configurations'
-import { GroupConfiguration, SaveOptions, Translation } from '@/util/types'
+  defaultDrafts,
+  exportRules,
+  importRules,
+  newRule,
+  previewRule,
+  toDrafts,
+} from './util/once-settings'
 
-const msg = inject<Translation>('msg')!
-const settingsButton = useTemplateRef('settingsButton')
-const addButton = useTemplateRef('addButton')
-const groupRefs: Record<string, typeof Group> = {}
-
-const groups = useGroupConfigurations()
-
-const groupsCopy = useSyncedCopy(groups.data, () => {
-  // Sync back to storage
-  saveGroupConfigurations(groupsCopy.value)
+const {
+  drafts,
+  savedRules,
+  loading,
+  loadFailed,
+  saving,
+  dirty,
+  error,
+  notice,
+  changedElsewhere,
+  reload,
+  save,
+} = useOnceSettings()
+const testUrl = ref('https://chatgpt.com/')
+const testTitle = ref('')
+const fileInput = ref<HTMLInputElement>()
+const restoringDefaults = ref(false)
+function beforeUnload(event: BeforeUnloadEvent) {
+  if (dirty.value) {
+    event.preventDefault()
+    event.returnValue = ''
+  }
+}
+onMounted(() => window.addEventListener('beforeunload', beforeUnload))
+onScopeDispose(() => window.removeEventListener('beforeunload', beforeUnload))
+const preview = computed(() => {
+  try {
+    const rule = previewRule(drafts.value, testUrl.value, testTitle.value)
+    return { rule, error: '' }
+  } catch (cause) {
+    return {
+      rule: undefined,
+      error: cause instanceof Error ? cause.message : 'Bitte die Regeln prüfen.',
+    }
+  }
 })
 
-const undoStack: Array<() => void> = []
-function undo() {
-  if (undoStack.length > 0) {
-    const undoAction = undoStack.pop()
-    undoAction!()
-  }
-
-  showDeletedSnackbar.value = false
+function moveRule(index: number, direction: number) {
+  const target = index + direction
+  if (target < 0 || target >= drafts.value.length) return
+  const [rule] = drafts.value.splice(index, 1)
+  drafts.value.splice(target, 0, rule!)
 }
 
-const showAddDialog = ref(false)
-const showSettingsDialog = ref(false)
-
-const sortMode = ref(false)
-function toggleSortMode() {
-  sortMode.value = !sortMode.value
-
-  if (sortMode.value) {
-    // Prevent options dialog height from collapsing
-    document.documentElement.style.setProperty(
-      '--body-height',
-      `${Math.min(document.body.clientHeight, window.innerHeight)}px`,
-    )
-
-    window.scrollTo({
-      top: 0,
-      behavior: 'smooth',
-    })
-  }
-}
-
-const dragging = ref(false)
-function startDragging(event: any) {
-  event.item.classList.add('no-matchers')
-  dragging.value = true
-}
-
-const resetBodyHeight = useDebounceFn(() => {
-  document.documentElement.style.removeProperty('--body-height')
-}, 100)
-
-function scrollGroupIntoView(id: string) {
-  document.getElementById(`group-${id}`)?.scrollIntoView({
-    behavior: 'smooth',
-    block: 'start',
-  })
-}
-Object.assign(window, { scrollGroupIntoView })
-
-function deleteGroup(group: GroupConfiguration) {
-  const index = groupsCopy.value.findIndex(
-    searchedGroup => searchedGroup.id === group.id,
+function exportConfiguration() {
+  const url = URL.createObjectURL(
+    new Blob([exportRules(savedRules.value)], { type: 'application/json' }),
   )
-
-  undoStack.push(() => {
-    groupsCopy.value.splice(index, 0, group)
-
-    // oxlint-disable-next-line @typescript-eslint/no-floating-promises
-    nextTick(() => {
-      scrollGroupIntoView(group.id)
-    })
-  })
-  groupsCopy.value.splice(index, 1)
-
-  showDeletedSnackbar.value = true
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `tabs-once-einstellungen-${new Date().toISOString().slice(0, 10)}.json`
+  link.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1_000)
 }
 
-function addGroup(
-  title: string,
-  color: `${chrome.tabGroups.Color}`,
-  options: SaveOptions,
-) {
-  const id = crypto.randomUUID()
-
-  groupsCopy.value.push({
-    id,
-    title: title,
-    color: color,
-    matchers: [],
-    options,
-  })
-
-  // oxlint-disable-next-line @typescript-eslint/no-floating-promises
-  nextTick(() => {
-    groupRefs[id].showNewMatcher()
-
-    setTimeout(() => {
-      scrollGroupIntoView(id)
-    }, 0)
-  })
+async function importConfiguration(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  error.value = ''
+  try {
+    const rules = importRules(await file.text())
+    drafts.value = toDrafts(rules)
+    notice.value = 'Konfiguration eingelesen. Zum Übernehmen bitte speichern.'
+  } catch {
+    error.value =
+      'Die Datei ist keine gültige Konfiguration. Deine Regeln wurden nicht verändert.'
+  } finally {
+    input.value = ''
+  }
 }
 
-const scrollToGroup = useStorage('scrollToGroup', '', {
-  storage: 'local',
-})
-
-const viewStore = useViewStore()
-
-const showDeletedSnackbar = ref(false)
-
-const { load } = useStyleTag(`html {
-  height: 100%;
-}`)
-
-onMounted(() => {
-  load()
-
-  until(scrollToGroup.loaded)
-    .toBeTruthy()
-    .then(() => {
-      if (scrollToGroup.data.value) {
-        const id = scrollToGroup.data.value
-        scrollToGroup.data.value = ''
-
-        setTimeout(() => {
-          scrollGroupIntoView(id)
-        }, 300)
-      }
-
-      watch(scrollToGroup.data, id => {
-        if (!id) return
-
-        scrollToGroup.data.value = ''
-        if (viewStore.edit.hasAny) {
-          viewStore.edit.sendCloseSignal()
-
-          setTimeout(() => {
-            scrollGroupIntoView(id)
-          }, 450)
-        } else {
-          scrollGroupIntoView(id)
-        }
-      })
-    })
-})
+function restoreDefaults() {
+  drafts.value = defaultDrafts()
+  restoringDefaults.value = false
+  notice.value =
+    'Standardregeln als Entwurf eingesetzt. Zum Übernehmen bitte speichern.'
+}
 </script>
 
 <template>
   <Layout>
-    <v-container>
-      <v-alert type="info" variant="tonal" density="compact" class="mb-4">
-        {{ msg.groupOnceHint }}
-      </v-alert>
-      <div class="settings">
-        <div class="groups">
-          <img
-            v-if="groupsCopy.length === 0"
-            src="/arrow.svg"
-            class="initial-arrow"
-            draggable="false"
-          />
-          <template v-else>
-            <Draggable
-              v-model="groupsCopy"
-              item-key="id"
-              handle=".drag-handle"
-              drag-class="dragging"
-              @start="startDragging"
-              @end="dragging = false"
+    <div class="settings-page">
+      <header class="page-header">
+        <div class="brand">
+          <span class="brand-icon" aria-hidden="true">
+            <i></i>
+            <i></i>
+            <i></i>
+          </span>
+          <span>
+            Tabgruppen
+            <b>Once</b>
+          </span>
+        </div>
+        <span class="version-tag">Version {{ manifest.version }}</span>
+      </header>
+      <main>
+        <section class="intro">
+          <span class="eyebrow">DEINE TAB-ORDNUNG</span>
+          <h1>
+            Einmal einsortieren.
+            <br />
+            Danach bleibt’s.
+          </h1>
+          <p>
+            Du bestimmst, wohin neue Tabs kommen. Was du später verschiebst, bleibt
+            genau dort.
+          </p>
+          <div class="behavior-chips">
+            <span>
+              <i class="status-dot"></i>
+              Nur neue Tabs
+            </span>
+            <span>Manuelles Verschieben bleibt erhalten</span>
+            <span>Keine Tab-Kopien</span>
+          </div>
+        </section>
+        <div v-if="loading" class="panel loading-state" role="status">
+          Einstellungen werden geladen …
+        </div>
+        <template v-else>
+          <div v-if="error" class="message error" role="alert">
+            {{ error }}
+            <button
+              v-if="loadFailed"
+              type="button"
+              class="button secondary"
+              @click="reload"
             >
-              <template #header>
-                <SlideVertical :duration="0.3">
-                  <div class="sort-hint" v-if="sortMode">
-                    {{ msg.sortHint }}
-                  </div>
-                </SlideVertical>
-              </template>
-              <template #item="{ element: group }">
-                <Group
-                  :ref="
-                    (component: any) => {
-                      if (component === null) {
-                        delete groupRefs[group.id]
-                      } else {
-                        groupRefs[group.id] = component
-                      }
-                    }
-                  "
-                  :id="`group-${group.id}`"
-                  :group-id="group.id"
-                  v-model:title="group.title"
-                  v-model:color="group.color"
-                  v-model:options="group.options"
-                  v-model:matchers="group.matchers"
-                  @delete="deleteGroup(group)"
-                  @after-enter="resetBodyHeight"
-                  :sort-mode="sortMode"
+              Erneut laden
+            </button>
+          </div>
+          <div v-if="changedElsewhere" class="message warning" role="alert">
+            <p>
+              In einem anderen Fenster wurde eine neue Konfiguration gespeichert.
+              Dein Entwurf wurde nicht überschrieben.
+            </p>
+            <button
+              class="button secondary"
+              type="button"
+              :disabled="saving"
+              @click="reload"
+            >
+              Aktuellen Stand laden und Entwurf verwerfen
+            </button>
+          </div>
+          <div v-if="!loadFailed" class="workspace">
+            <section aria-labelledby="rules-heading" class="rules-section">
+              <div class="section-heading">
+                <div>
+                  <h2 id="rules-heading">
+                    Zuordnungsregeln
+                    <span class="count">{{ drafts.length }}</span>
+                  </h2>
+                  <p>Von oben nach unten. Die erste passende Regel entscheidet.</p>
+                </div>
+                <button
+                  class="button secondary"
+                  type="button"
+                  :disabled="saving"
+                  @click="drafts.push(newRule())"
+                >
+                  + Regel hinzufügen
+                </button>
+              </div>
+              <div v-if="!drafts.length" class="panel empty-state">
+                <h3>Noch keine Regeln</h3>
+                <p>
+                  Neue Tabs behalten ihre Chrome-Gruppierung. Füge eine Regel hinzu,
+                  um sie automatisch einzuordnen.
+                </p>
+              </div>
+              <OnceRuleEditor
+                v-for="(rule, index) in drafts"
+                :key="rule.id"
+                v-model="drafts[index]!"
+                :position="index + 1"
+                :total="drafts.length"
+                :disabled="saving"
+                @move="moveRule(index, $event)"
+                @remove="drafts.splice(index, 1)"
+              />
+            </section>
+            <aside class="sidebar">
+              <section class="panel preview-panel" aria-labelledby="preview-heading">
+                <span class="eyebrow">VORSCHAU</span>
+                <h2 id="preview-heading">Wohin kommt der Tab?</h2>
+                <p>Probiere deinen aktuellen Entwurf aus.</p>
+                <label for="test-url">Adresse des neuen Tabs</label>
+                <input
+                  id="test-url"
+                  v-model="testUrl"
+                  type="text"
+                  spellcheck="false"
+                  placeholder="https://chatgpt.com/"
                 />
-              </template>
-            </Draggable>
-          </template>
-        </div>
-        <div class="bottom-buttons">
-          <v-tooltip
-            v-if="groups.data.value.length > 1"
-            :text="msg.buttonSortMode"
+                <label for="test-title">
+                  Tabtitel
+                  <span class="optional">optional</span>
+                </label>
+                <input
+                  id="test-title"
+                  v-model="testTitle"
+                  type="text"
+                  placeholder="z. B. AC Zentrale"
+                />
+                <div class="preview-result" aria-live="polite">
+                  <template v-if="!testUrl.trim()">
+                    <span class="muted">Gib eine Adresse ein.</span>
+                  </template>
+                  <template v-else-if="preview.error">
+                    <span class="muted">{{ preview.error }}</span>
+                  </template>
+                  <template v-else-if="preview.rule">
+                    <span class="muted">Zielgruppe</span>
+                    <strong>
+                      <span
+                        class="group-dot"
+                        :style="`--dot-color: var(--group-${preview.rule.color})`"
+                      ></span>
+                      {{ preview.rule.title }}
+                    </strong>
+                    <span class="muted">
+                      {{
+                        preview.rule.options.merge
+                          ? 'Bestehende Gruppe auch in anderen Fenstern verwenden.'
+                          : 'Gruppe im Fenster des neuen Tabs verwenden.'
+                      }}
+                    </span>
+                  </template>
+                  <template v-else>
+                    <strong>Keine passende Regel</strong>
+                    <span class="muted">Die Gruppierung bleibt unverändert.</span>
+                  </template>
+                </div>
+                <p class="small muted">Die Vorschau verschiebt keinen Tab.</p>
+              </section>
+              <section class="help-panel" aria-labelledby="behavior-heading">
+                <h3 id="behavior-heading">So arbeitet Once</h3>
+                <p>
+                  URL und Titel werden nur beim ersten Öffnen geprüft. Spätere
+                  Navigation und manuelles Verschieben lösen keine neue Zuordnung
+                  aus.
+                </p>
+                <p>
+                  Geänderte Regeln gelten für neue Tabs. Bestehende Gruppen werden
+                  dadurch nicht umbenannt.
+                </p>
+                <p>
+                  Beim Chrome-Start schützt eine kurze Pause die wiederhergestellten
+                  Tabs. Auch selbst geöffnete Tabs bleiben während dieser Phase
+                  unverändert.
+                </p>
+              </section>
+            </aside>
+          </div>
+          <section
+            v-if="!loadFailed"
+            class="panel backup-panel"
+            aria-labelledby="backup-heading"
           >
-            <template #activator="{ props: tooltipProps }">
-              <v-fab
-                v-bind="tooltipProps"
-                class="sort-button"
-                :color="sortMode ? 'pale-primary' : 'pale'"
-                icon="mdi-swap-vertical"
-                size="small"
-                @click="toggleSortMode"
-                mini
-                :text="msg.buttonSortMode"
-              />
-            </template>
-          </v-tooltip>
-
-          <v-tooltip :text="msg.buttonSettings">
-            <template #activator="{ props: tooltipProps }">
-              <v-fab
-                v-bind="tooltipProps"
-                class="settings-button"
-                ref="settingsButton"
-                color="pale"
-                icon="mdi-cog"
-                size="small"
-                :text="msg.buttonSettings"
-                @click="showSettingsDialog = true"
-              />
-            </template>
-          </v-tooltip>
-          <SettingsDialog v-model="showSettingsDialog" />
-
-          <v-tooltip :text="msg.buttonAddGroup">
-            <template #activator="{ props: tooltipProps }">
-              <v-fab
-                v-bind="tooltipProps"
-                class="add-button"
-                ref="addButton"
-                icon="mdi-plus"
-                size="small"
-                :text="msg.buttonAddGroup"
-                @click="showAddDialog = true"
-              />
-            </template>
-          </v-tooltip>
-          <EditDialog v-model="showAddDialog" color="grey" @save="addGroup" />
+            <div>
+              <h2 id="backup-heading">Sichern &amp; wiederherstellen</h2>
+              <p>
+                Exportiere deine gespeicherten Regeln oder lade eine Konfiguration
+                als Entwurf.
+              </p>
+            </div>
+            <div class="backup-actions">
+              <button
+                type="button"
+                class="button secondary"
+                :disabled="saving"
+                @click="exportConfiguration"
+              >
+                Exportieren
+              </button>
+              <button
+                type="button"
+                class="button secondary"
+                :disabled="saving"
+                @click="fileInput?.click()"
+              >
+                Importieren
+              </button>
+              <button
+                type="button"
+                class="text-button"
+                :disabled="saving"
+                @click="restoringDefaults = !restoringDefaults"
+              >
+                Standardregeln
+              </button>
+            </div>
+            <input
+              ref="fileInput"
+              class="visually-hidden"
+              type="file"
+              accept=".json,application/json"
+              aria-label="Konfiguration importieren"
+              :disabled="saving"
+              @change="importConfiguration"
+            />
+            <div v-if="restoringDefaults" class="reset-confirmation">
+              <p>
+                Den aktuellen Entwurf durch die Standardregeln GPT und Default
+                ersetzen? Deine gespeicherten Regeln bleiben bis zum Speichern
+                erhalten.
+              </p>
+              <button
+                type="button"
+                class="button secondary"
+                :disabled="saving"
+                @click="restoreDefaults"
+              >
+                Standardregeln einsetzen
+              </button>
+              <button
+                type="button"
+                class="text-button"
+                @click="restoringDefaults = false"
+              >
+                Abbrechen
+              </button>
+            </div>
+          </section>
+        </template>
+      </main>
+      <footer class="save-bar" aria-label="Änderungen übernehmen">
+        <div>
+          <strong>
+            {{
+              loadFailed
+                ? 'Einstellungen nicht geladen'
+                : saving
+                  ? 'Wird gespeichert …'
+                  : dirty
+                    ? 'Ungespeicherte Änderungen'
+                    : 'Alles auf dem aktuellen Stand'
+            }}
+          </strong>
+          <p role="status">
+            {{
+              error ||
+              notice ||
+              (dirty
+                ? 'Bestehende Tabs bleiben unverändert.'
+                : 'Deine Regeln werden beim Öffnen neuer Tabs angewendet.')
+            }}
+          </p>
         </div>
-
-        <Snackbar v-model="showDeletedSnackbar">
-          {{ msg.groupDeletedNotice }}
-
-          <template #actions>
-            <v-btn @click="undo">
-              {{ msg.undo }}
-            </v-btn>
-          </template>
-        </Snackbar>
-      </div>
-    </v-container>
+        <div class="save-actions">
+          <button
+            class="button secondary"
+            type="button"
+            :disabled="loading || saving || !dirty"
+            @click="reload"
+          >
+            Änderungen verwerfen
+          </button>
+          <button
+            class="button primary"
+            type="button"
+            :disabled="loading || loadFailed || saving || !dirty || changedElsewhere"
+            @click="save"
+          >
+            {{ saving ? 'Wird gespeichert …' : 'Änderungen speichern' }}
+          </button>
+        </div>
+      </footer>
+    </div>
   </Layout>
 </template>
-
-<style>
-:root {
-  --v-theme-overlay-multiplier: 2;
-}
-
-:where(*),
-:where(*)::before,
-:where(*)::after {
-  box-sizing: border-box;
-}
-
-:where(
-  button,
-  input:not(
-    :is([type='checkbox'], [type='radio'], [type='range'], [type='hidden'])
-  ),
-  select,
-  textarea
-) {
-  margin: 0;
-  padding: 0;
-  border: none;
-  border-radius: 0;
-  display: inline-flex;
-  align-items: center;
-  font: inherit;
-  line-height: 1;
-  letter-spacing: inherit;
-  word-spacing: inherit;
-  white-space: nowrap;
-  background: none;
-  color: inherit;
-  text-align: left;
-}
-
-:where(button, input:is([type='submit'], [type='button'])) {
-  cursor: pointer;
-}
-
-.v-field.v-field--variant-outlined {
-  &:is(.v-input--focused *) {
-    .v-label.v-field-label {
-      font-weight: 500;
-    }
-  }
-
-  .v-field__outline {
-    --v-field-border-width: 2px;
-
-    @media (min-resolution: 2dppx) {
-      --v-field-border-width: 1.5px;
-    }
-  }
-
-  &:not(.v-input--focused *) .v-field__outline {
-    --v-field-border-width: 0px;
-  }
-
-  .v-field__overlay {
-    background-color: rgb(var(--v-theme-text-field-background));
-  }
-}
-
-.v-selection-control.v-radio .v-icon {
-  --v-medium-emphasis-opacity: 1;
-}
-
-.v-btn {
-  text-transform: none;
-  letter-spacing: 0;
-
-  &.v-btn--size-default.v-btn--variant-text {
-    padding-inline: 8px;
-  }
-
-  &.v-btn--icon {
-    font-size: 1.2em;
-  }
-}
-</style>
-
-<style scoped>
-.settings {
-  padding-bottom: 60px;
-}
-
-.groups {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-  margin-bottom: 1.25rem;
-}
-
-.group-matchers-info {
-  margin-top: 0.5rem;
-  color: var(--grey);
-  font-size: 12px;
-
-  :deep(a) {
-    color: inherit;
-  }
-}
-
-.bottom-buttons {
-  display: flex;
-  gap: 12px;
-  position: fixed;
-  bottom: 1rem;
-  right: 1rem;
-  z-index: 1;
-}
-
-.initial-arrow {
-  position: fixed;
-  right: 60px;
-  bottom: 67px;
-  width: 80px;
-  height: auto;
-}
-
-.sort-hint {
-  margin-bottom: 8px;
-  font-size: 13px;
-  color: var(--dimmed);
-}
-</style>

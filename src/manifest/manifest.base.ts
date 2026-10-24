@@ -1,9 +1,9 @@
 export default {
   name: '__MSG_appName__',
-  version: '0.1.1',
+  version: '0.2.0',
   manifest_version: 3,
   description: '__MSG_appDesc__',
-  homepage_url: 'https://github.com/nicokieferle/auto-group-tabs',
+  homepage_url: 'https://github.com/nicokieferle/chrome-group-tabs',
   icons: {
     '16': 'icons/icon16.png',
     '19': 'icons/icon19.png',
@@ -12,7 +12,7 @@ export default {
   },
   default_locale: 'en',
   options_ui: {
-    open_in_tab: false,
+    open_in_tab: true,
     page: 'index.html?context=options',
   },
   action: {
