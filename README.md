@@ -1,117 +1,60 @@
-# Auto-Group Tabs – Once (Nico)
+# Tabgruppen · Once
 
-Personal MIT-licensed fork of [loilo/auto-group-tabs](https://github.com/loilo/auto-group-tabs), based on 0.0.24 (`c354e34`). This Chrome build groups **new tabs once** instead of continuously regrouping them. It is a separate unpacked extension, not an official store release.
+Persönlicher MIT-lizenzierter Fork von [loilo/auto-group-tabs](https://github.com/loilo/auto-group-tabs), ursprünglich auf Version 0.0.24 (`c354e34`) aufgebaut. Diese Erweiterung ordnet **neue Tabs einmalig** einer nativen Chrome-Gruppe zu. Danach bleiben Navigation und manuelles Verschieben ohne automatische Neuzuordnung.
 
-## Verhalten
+## Einstellungen ab Version 0.2.0
 
-- Neue ChatGPT-Tabs (`https://chatgpt.com/*`, auch `https://chat.openai.com/*`) werden der vorhandenen nativen Chrome-Gruppe **GPT** zugeordnet. Die Farbe ist frei wählbar. Fehlt die Gruppe, wird sie erstellt.
-- Alle anderen neu geöffneten Tabs, auch leere neue Tabs, kommen in **Default**. Die Regel mit URL-Muster `*` steht deshalb zuletzt.
-- GPT nutzt standardmäßig auch eine bestehende Gruppe in einem anderen normalen Fenster. Default bleibt im jeweiligen Fenster. Private und normale Fenster werden nicht vermischt.
-- Die Zuordnung erfolgt nach dem ersten Laden, sobald URL/Titel kurz stabil sind; bei einer dauerhaft ladenden Seite spätestens nach 12 Sekunden. Lesezeichen, die in einem **neuen** Tab geöffnet werden, funktionieren damit genauso wie andere neue Tabs.
-- Danach bleibt die Zuordnung unverändert: spätere URL-/Titeländerungen, Aktualisieren, manuelles Verschieben oder Aufheben der Gruppierung lösen keine erneute Einsortierung aus. Ein leerer Tab, der schon in Default liegt und später zu ChatGPT navigiert, bleibt also in Default.
-- Bereits offene Tabs werden bei Installation, Neustart des Hintergrundprozesses oder Änderung der Regeln nicht nachträglich einsortiert. Eine neue, von Chrome geerbte Gruppe darf bei der Erstzuordnung geändert werden; eine weitere Gruppenänderung während des Ladens beendet die Automatik für diesen Tab. Die erste Gruppenzuweisung eines zuvor ungruppierten neuen Tabs kann Chrome erst nachträglich melden; diese wird als geerbte Gruppe behandelt.
-- **Chrome-Neustart:** Wiederhergestellte Tabs behalten ihre von Chrome wiederhergestellte Gruppe und ihr Fenster. Chrome meldet auch diese Tabs mit `tabs.onCreated`; deshalb bleibt die Automatik beim Profilstart pausiert, bis drei Sekunden lang kein weiterer Tab erstellt wurde. In dieser Phase selbst neu geöffnete Tabs bleiben ebenfalls unverändert. Bereits verworfene/nicht geladene Tabs werden auch bei späterer Wiederherstellung nicht erneut einsortiert. Ein später erstellter, bereits geladener Wiederherstellungstab ohne solche Merkmale ist von einem normalen neuen Tab nicht sicher unterscheidbar; die Schutzphase ist bewusst konservativ, keine dauerhafte Identitätsgarantie.
-- Erledigte Tabs werden während der laufenden Browsersitzung anhand ihrer ID als verarbeitet markiert. **Tab- und Gruppen-IDs gelten nur innerhalb einer Browsersitzung**; nach einem vollständigen Neustart werden alte IDs nicht verwendet. Maßgeblich ist dann die native Chrome-Gruppenzuordnung. Es werden keine Gruppen oder Tabs aus einer eigenen Kopie rekonstruiert und keine URLs zum Wiedererkennen gespeichert.
-- Angeheftete Tabs, Chrome-Split-View-Tabs und Popup-Fenster bleiben unverändert.
+Popup und Einstellungsseite wurden für den Once-Ablauf neu aufgebaut. Die Oberfläche ist durchgehend deutsch. Die frühere Regelerstellung im Popup, „Exakt“, verschachtelte Originaldialoge und „Neu laden erzwingen“ werden nicht mehr verwendet. Die vorhandenen Komponenten des Originals gehören nicht mehr zum Oberflächen-Einstiegspunkt.
 
-## Titel-Ausnahmen
+- **Popup:** Übersicht der gespeicherten Regeln und Schaltfläche „Einstellungen öffnen“.
+- **Eigene Einstellungsseite:** Gruppenname, Farbe neuer Gruppen, URL-Muster, Titel-Ausnahmen und Fensterzuordnung werden direkt an der jeweiligen Regel bearbeitet.
+- **Reihenfolge:** Die erste passende Regel gewinnt. Pfeiltasten an jeder Karte verschieben Regeln nach oben oder unten. Eine Auffangregel mit `*` steht üblicherweise zuletzt; andernfalls erscheint ein Hinweis.
+- **Explizites Speichern:** Bearbeitung, Import, Löschen und Einsetzen der Standardregeln verändern zunächst nur den Entwurf. „Änderungen speichern“ übernimmt ihn. „Änderungen verwerfen“ lädt den gespeicherten Stand.
+- **Vorschau:** Eine Adresse und ein Tabtitel zeigen die Zuordnung gemäß dem Entwurf. Dafür wird derselbe Matcher wie im Hintergrund verwendet; kein Tab wird verschoben.
+- **Sicherung:** Exportiert wird der gespeicherte Stand als versionierte JSON-Datei. Der Import akzeptiert diese Datei sowie die Array-Exporte früherer Versionen.
 
-In den Optionen neben **GPT** auf den Stift klicken → **Erweiterte Einstellungen** → **Titel ausschließen, die Folgendes enthalten**. Ein Begriff pro Zeile, zum Beispiel `xxx` und `Secret`. Groß-/Kleinschreibung ist egal; es genügt, wenn der Tabtitel den Begriff enthält. Ein ausgeschlossener Tab nutzt die nächste passende Regel, normalerweise **Default**.
+Bereits gespeicherte Gruppen, IDs, Farben, Muster, Titel-Ausnahmen und Fensteroptionen werden aus dem bisherigen Speicherformat übernommen. Es gibt keine automatische Migration beim bloßen Öffnen der Einstellungen. Die nicht mehr verwendete Option `strict` wird bei einem ausdrücklichen Speichervorgang auf `false` gesetzt.
 
-Die Prüfung verwendet den **Tabtitel der ersten geladenen Seite**, nicht den Namen eines Lesezeichens. Ein erst später von der Website geänderter Titel wird bewusst nicht neu geprüft. Ausnahmen in der Default-Regel lassen die Gruppierung betroffener Tabs unverändert, wenn keine weitere Regel passt.
+Änderungen aus einem zweiten Fenster überschreiben keinen offenen Entwurf automatisch. Vor dem Speichern wird der zuletzt gelesene Stand erneut verglichen. Ein erkannter Konflikt verlangt das bewusste Neuladen. Dies ist keine atomare Transaktion zwischen exakt gleichzeitigen Speichervorgängen.
 
-## Installation in Chrome
+## Standardverhalten
 
-1. Das bereitgestellte ZIP entpacken und den Ordner dauerhaft behalten.
-2. Eine bereits installierte Original-Erweiterung **Auto-Group Tabs** deaktivieren, damit sie nicht parallel umsortiert.
-3. `chrome://extensions` öffnen und **Entwicklermodus** einschalten.
-4. **Entpackte Erweiterung laden** wählen und den Ordner `extension-chromium` auswählen (dort liegt `manifest.json`).
-5. Beim ersten Start sind GPT und Default vorkonfiguriert. Eine bereits vorhandene Gruppe mit entsprechendem Namen wird verwendet. Gruppenname, URL-Muster und Titel-Ausnahmen lassen sich in **Weitere Optionen** ändern.
+1. Neue ChatGPT-Tabs (`https://chatgpt.com/*`, `https://chat.openai.com/*`) kommen in **GPT**. Eine bestehende Gruppe wird anhand ihres Namens verwendet; die GPT-Standardregel darf sie auch in einem anderen normalen Fenster finden.
+2. Alle anderen neuen Tabs, auch leere Tabs, kommen in **Default** im jeweiligen Fenster.
+3. URL und Titel werden nach dem ersten Laden geprüft, sobald sie kurz stabil sind; bei dauerhaftem Laden spätestens nach zwölf Sekunden.
+4. Danach wird der Tab nicht erneut einsortiert. Auch ein zunächst leerer Tab in Default bleibt dort, wenn später ChatGPT darin geöffnet wird.
 
-**Update:** Chrome geöffnet lassen, den Inhalt von `extension-chromium` im bisher geladenen Ordner durch den Inhalt des neuen ZIPs ersetzen und bei `chrome://extensions` auf **Neu laden** klicken. Den bisherigen Ordner und dieselbe Erweiterungsinstallation verwenden, damit die Regeln erhalten bleiben. Danach kurz warten, bis die Startschutzphase vorbei ist. Version 0.1.1 korrigiert künftige Neustarts; zuvor bereits falsch verschobene Tabs müssen einmal manuell in die gewünschte Gruppe zurückgelegt werden.
+Eine Titel-Ausnahme greift, wenn der **erste Tabtitel** einen eingetragenen Begriff enthält, unabhängig von Groß-/Kleinschreibung. Dann wird die nächste Regel geprüft. Es geht nicht um Lesezeichen- oder Gruppennamen. Ein Titel, den die Website später ändert, wird nicht erneut geprüft.
 
-Berechtigungen bleiben `tabs`, `tabGroups`, `storage`. Es gibt keine neuen Berechtigungen, Content-Skripte, Host-Berechtigungen oder externen Netzwerkaufrufe im neuen Hintergrundcode. Regeln liegen wie beim Original in Chrome-Sync; noch nicht einsortierte und bereits verarbeitete Tab-IDs sowie der Startschutz liegen in Chrome-Session-Storage, ohne URLs oder Titel.
+Fensterübergreifende Zuordnung verschiebt einen passenden neuen Tab bei Bedarf zur vorhandenen Gruppe. Normale und private Fenster werden nicht vermischt. Angeheftete Tabs, Split-Views und Popup-Fenster bleiben unverändert. Eine vorhandene Gruppe behält ihre Farbe; die konfigurierte Farbe gilt beim Anlegen einer neuen Gruppe.
 
-## Build und Tests
+## Neustartschutz
 
-Node.js 24 und `npm ci`. `npx playwright install chromium` installiert den Browser für die UI-Tests. `npm run build:chromium` führt Prüfungen und Build aus. Die UI-Tests laufen standardmäßig ohne sichtbares Fenster; mit `PW_HEADED=1 npm run test:browser` lassen sie sich sichtbar starten. Die Unit-Tests simulieren zusätzlich Tab-Ereignisse und Service-Worker-Neustarts.
+Chrome meldet auch wiederhergestellte Tabs über `tabs.onCreated`. Der Hintergrund schützt deshalb die Startphase, bis drei Sekunden lang kein weiterer Tab erstellt wurde. Während dieser Phase selbst neu geöffnete Tabs bleiben ebenfalls unverändert. Bereits verworfene oder nicht geladene Wiederherstellungstabs bleiben auch bei späteren Meldungen geschützt.
 
-Die ursprüngliche MIT-Lizenz und die ursprüngliche Entwicklungsdokumentation folgen.
+Tab- und Gruppen-IDs gelten nur innerhalb einer Browsersitzung. Nach einem vollständigen Neustart bleibt die von Chrome wiederhergestellte Gruppierung maßgeblich; alte numerische IDs werden nicht weiterverwendet. Ein ungewöhnlich spät wiederhergestellter, bereits geladener Tab ist von einem tatsächlich neuen Tab nicht sicher unterscheidbar. Die Pause ist keine dauerhafte Identitätsgarantie. Es werden keine Gruppen oder Tabs aus eigenen Kopien wiederhergestellt.
 
----
+## Installation und Update
 
-# Auto-Group Tabs
+1. ZIP entpacken und dauerhaft aufbewahren. Eine installierte Original-Erweiterung vorher deaktivieren.
+2. Unter `chrome://extensions` den Entwicklermodus aktivieren.
+3. „Entpackte Erweiterung laden“ wählen und **den Ordner `extension-chromium`** auswählen; darin liegt `manifest.json`.
 
-This is a browser extension for Google Chrome and Firefox which enables the configuration of tab groups for certain URLs. Navigating to such a URL will automatically add the tab to its configured group (creating the group if it does not exist).
+**Update einer bestehenden Installation:** Chrome geöffnet lassen. Die Dateien aus `extension-chromium` des neuen ZIPs in den bisher geladenen `extension-chromium`-Ordner kopieren und ersetzen. Bei derselben Erweiterung unter `chrome://extensions` auf **Neu laden** klicken. Keine zweite Installation anlegen: So bleiben die vorhandenen Regeln erhalten. Danach kurz warten, bis der Startschutz vorbei ist.
 
-## Development
+## Berechtigungen und Daten
 
-This project is built with [Vue](https://v3.vuejs.org/) and [Vite](https://vitejs.dev/).
+Unverändert: `tabs`, `tabGroups`, `storage`. Keine zusätzlichen Berechtigungen, Host-Freigaben oder Content-Skripte. Die neue Oberfläche verwendet keine externen Dienste, Schriftserver oder Netzwerkanfragen. Regeln liegen weiterhin komprimiert in Chrome-Sync; der Sitzungsstatus enthält Tab-IDs und den Startschutz, keine URLs oder Titel. Die vorhandene MIT-Lizenz bleibt erhalten.
 
-### Setup
+## Entwicklung und Prüfung
 
-> **Requirements:** Note that at least Node.js v24 is needed to develop and build this project.
+Node.js 24 und `npm ci`. `npm run dev` startet die lokale Oberfläche auf Port 6655; `/?context=options` öffnet die Einstellungsseite, `/?context=popup` das Popup. Ohne Erweiterung wird für die Entwicklung `localStorage` verwendet.
 
-Clone this project:
+- `npm run test:unit`: Zuordnung, Neustartschutz, Übernahme alter Regeln, Import/Export, Vorschau und Speicherfehler.
+- `npm run test:types` und `npm run test:lint`: Typen und Lint.
+- `npx playwright install chromium`, anschließend `npm run test:browser`: Oberfläche, Speichern und Wiederladen, Ausnahmen, Priorität, Import, Popup und schmale Fenster.
+- `npm run build:chromium`: vollständige Prüfungen und Chrome-Build.
 
-```bash
-git clone https://github.com/loilo/auto-group-tabs.git
-```
+Der Chrome-Build liegt anschließend in `extension-chromium`. Ein Merge oder eine Veröffentlichung im Chrome Web Store sind eigene Schritte.
 
-Step into the cloned folder and install [npm](https://www.npmjs.com/) dependencies:
-
-```bash
-npm ci
-```
-
-### Development of the Options UI
-
-The fastest way to tinker with the heart of this extension — its options page — is to run the `dev` script:
-
-```bash
-npm run dev
-```
-
-This will start up the Vite dev server and serve the options page on [localhost:6655](http://localhost:6655/). Having the options page directly in the browser allows for comfort features like hot module reloading to be usable during development.
-
-In this mode, Chrome extension APIs accessed during production (e.g. `chrome.i18n` and `chrome.storage`) use browser-based fallbacks.
-
-> **Note:** You probably want to use the [device toolbar](https://developers.google.com/web/tools/chrome-devtools/device-mode) of Chrome's devtools to give the options page a proper viewport. Chrome's options overlays are (at the time of writing) 400px wide, and I used a height of 600px during development.
-
-### Testing in the Browser
-
-#### Chrome
-
-To test the extension in Chrome, you'll have to do a production build of it:
-
-```bash
-npm run build:chromium
-```
-
-This will create a subfolder with the name `extension-chromium` inside the project, which can be installed in your Chrome browser.
-
-#### Firefox
-
-To test the extension in Firefox, you'll have to do a production build of it and zip it:
-
-```bash
-npm run pack:gecko
-```
-
-This will create a file named `auto-group-tabs.gecko.zip` inside the project root, which can be temporarily added under `about:debugging#/runtime/this-firefox`.
-
-### Do a Production Build
-
-Skim through the `package.json` to find what to run for your target browser. To do all the work necessary for distributing the extension, run:
-
-```bash
-npm run deploy
-```
-
-This will run all tests, create production builds for all supported browsers, and pack them into zip files ready for upload to the respective extension stores.
-
-### Contributing
-
-Contributions to this project are welcome, but to spare everyone involved some time: Please open an issue first to discuss your ideas before you start working on them.
-
-Pull requests without an issue used to be a grounds for discussion, just because of the amount of time already invested. But since due to AI, contributions have become a commodity for many, I view unsolicited pull requests as noise pollution and will close them without review.
+In eingeschränkten Testumgebungen kann Playwright über `PW_CHROMIUM_EXECUTABLE_PATH` einen bereits vorhandenen Chromium-Browser verwenden. `PW_CHROMIUM_ARGS` nimmt bei Bedarf ein JSON-Array zusätzlicher Startargumente auf. Diese Optionen betreffen ausschließlich den Testbrowser, nicht die ausgelieferte Erweiterung.
