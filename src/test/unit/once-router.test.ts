@@ -599,3 +599,33 @@ it('stops assignment if startup begins while native group queries are still runn
   expect(current.api.tabs.group).not.toHaveBeenCalled()
   expect(current.api.tabs.move).not.toHaveBeenCalled()
 })
+
+it('routes the tab that wakes a sleeping worker even when it is already in the baseline query', async () => {
+  current = harness([
+    { id: 7, windowId: 1, title: 'GPT', color: 'green', collapsed: false, shared: false },
+    { id: 8, windowId: 1, title: 'Default', color: 'grey', collapsed: false, shared: false },
+  ])
+  // Chrome has already created the bookmark tab when it starts the worker.
+  const created = current.put(71, { url: 'https://chatgpt.com/c/bookmark', groupId: 8 })
+  const router = current.start()
+  await router.ready
+  current.api.tabs.onCreated.emit({ ...created })
+  await settle(router)
+  expect(current.tabs.get(71)?.groupId).toBe(7)
+  expect(current.api.tabs.group).toHaveBeenCalledTimes(1)
+})
+
+it('retains already handled tabs while routing an onCreated event during worker initialization', async () => {
+  current = harness([], { 'group-once:handled:81': true })
+  current.put(81, { url: 'https://chatgpt.com/c/manual', groupId: 71 })
+  const created = current.put(82, { url: 'https://chatgpt.com/c/bookmark', groupId: -1 })
+  let resolve!: (value: () => GroupConfiguration[]) => void
+  const router = current.start(() => new Promise(done => { resolve = done }))
+  current.api.tabs.onCreated.emit({ ...created })
+  resolve(() => current!.rules)
+  await router.ready
+  await settle(router)
+  expect(current.tabs.get(81)?.groupId).toBe(71)
+  expect(current.groups.find(group => group.id === current!.tabs.get(82)?.groupId)?.title).toBe('GPT')
+  expect(current.api.tabs.group).toHaveBeenCalledTimes(1)
+})

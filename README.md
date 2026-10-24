@@ -4,6 +4,8 @@ Persönlicher MIT-lizenzierter Fork von [loilo/auto-group-tabs](https://github.c
 
 ## Einstellungen ab Version 0.2.0
 
+Version **0.2.1** korrigiert zusätzlich die Zuordnung des Tabs, der einen schlafenden Hintergrundprozess aufweckt. Dieser neue Tab darf beim Aufwachen nicht versehentlich als bereits verarbeiteter Bestand geschützt werden. Der Neustartschutz bleibt unverändert.
+
 Popup und Einstellungsseite wurden für den Once-Ablauf neu aufgebaut. Die Oberfläche ist durchgehend deutsch. Die frühere Regelerstellung im Popup, „Exakt“, verschachtelte Originaldialoge und „Neu laden erzwingen“ werden nicht mehr verwendet. Die vorhandenen Komponenten des Originals gehören nicht mehr zum Oberflächen-Einstiegspunkt.
 
 - **Popup:** Übersicht der gespeicherten Regeln und Schaltfläche „Einstellungen öffnen“.

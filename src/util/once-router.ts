@@ -75,8 +75,9 @@ export function registerOnceRouter(
   let restoreUntil = 0
   let startupSeen = false
   let startupGeneration = 0
-  // Take the baseline before awaiting configuration. Tabs already open when
-  // this worker starts belong to the user; pending records are resumed below.
+  // Take a baseline before awaiting configuration. On a cold start it protects
+  // restored tabs. On a worker wake-up the tab that triggered onCreated can
+  // already appear here, so the snapshot alone must not mark it as handled.
   const baseline = api.tabs.query({})
 
   function enqueue(task: () => Promise<void>) {
@@ -350,10 +351,12 @@ export function registerOnceRouter(
       await schedule(tabId)
     }
     const retained: Record<string, boolean> = {}
-    for (const tab of existing) {
-      if (tab.id !== undefined && !pending.has(tab.id) && !handled.has(tab.id)) {
-        handled.add(tab.id)
-        retained[HANDLED_PREFIX + tab.id] = true
+    if (!hasSession || startupSeen) {
+      for (const tab of existing) {
+        if (tab.id !== undefined && !pending.has(tab.id) && !handled.has(tab.id)) {
+          handled.add(tab.id)
+          retained[HANDLED_PREFIX + tab.id] = true
+        }
       }
     }
     if (Object.keys(retained).length) await api.storage.session.set(retained)
