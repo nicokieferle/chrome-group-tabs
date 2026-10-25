@@ -56,7 +56,7 @@ it('uses the actual once router for draft preview including title exclusions and
   expect(
     previewRule(drafts, 'https://chatgpt.com/c/123', 'Projekt XXX')?.title,
   ).toBe('Default')
-  expect(previewRule(drafts, 'chrome://newtab/', '')?.title).toBe('Default')
+  expect(previewRule(drafts, 'chrome://newtab/', '')).toBeUndefined()
   drafts.reverse()
   expect(previewRule(drafts, 'https://chatgpt.com/', '')?.title).toBe('Default')
   expect(previewRule(drafts, '', '')).toBeUndefined()

@@ -5,9 +5,15 @@ type ChromeApi = Pick<
   typeof chrome,
   'tabs' | 'tabGroups' | 'windows' | 'storage' | 'runtime'
 >
-type PendingTab = { startedAt: number; initialGroupId: number }
+type PendingTab = {
+  startedAt: number
+  initialGroupId: number
+  awaitingNavigation?: boolean
+}
+type GroupBinding = { groupId: number; ruleTitle: string }
 const PREFIX = 'group-once:pending:'
 const HANDLED_PREFIX = 'group-once:handled:'
+const TARGET_PREFIX = 'group-once:target:'
 const SESSION_KEY = 'group-once:session'
 // Chrome emits onCreated for restored tabs, too, and has no restored flag.
 // Protect the startup burst until tab creation has been quiet for three seconds.
@@ -15,12 +21,21 @@ const RESTORE_QUIET_MS = 3_000
 const SETTLE_MS = 750
 const MAX_WAIT_MS = 12_000
 
+/** A new-tab page is a placeholder, not the tab's first destination. */
+export function isNewTabPlaceholder(url: string) {
+  return (
+    !url ||
+    /^about:blank(?:[?#]|$)/i.test(url) ||
+    /^chrome:\/\/(?:newtab|new-tab-page|new-tab-page-third-party)(?:[/?#]|$)/i.test(
+      url,
+    )
+  )
+}
+
 /** First matching rule wins. A title exclusion falls through to the next rule. */
-export function matchNewTab(
-  tab: chrome.tabs.Tab,
-  groups: GroupConfiguration[],
-) {
+export function matchNewTab(tab: chrome.tabs.Tab, groups: GroupConfiguration[]) {
   const url = tab.pendingUrl || tab.url || ''
+  if (isNewTabPlaceholder(url)) return undefined
   const title = (tab.title || '').toLocaleLowerCase()
   return groups.find(group => {
     if (
@@ -49,9 +64,7 @@ export function createDefaultGroups(nativeGroups: chrome.tabGroups.TabGroup[]) {
       title: existing?.title ?? title,
       color: existing?.color ?? (index === 0 ? 'green' : 'grey'),
       matchers:
-        index === 0
-          ? ['https://chatgpt.com/*', 'https://chat.openai.com/*']
-          : ['*'],
+        index === 0 ? ['https://chatgpt.com/*', 'https://chat.openai.com/*'] : ['*'],
       options: { strict: false, merge: index === 0, excludedTitles: [] },
     }
   })
@@ -68,6 +81,7 @@ export function registerOnceRouter(
 ) {
   const pending = new Map<number, PendingTab>()
   const handled = new Set<number>()
+  const bindings = new Map<string, GroupBinding>()
   const timers = new Map<number, ReturnType<typeof setTimeout>>()
   let getGroups: () => GroupConfiguration[] = () => []
   let ready: Promise<void>
@@ -118,23 +132,43 @@ export function registerOnceRouter(
     const window = await api.windows.get(tab.windowId)
     if (window.type !== 'normal') return
     const groups = await api.tabGroups.query({})
-    // Match a native group by title; its color can change independently.
+    const bindingKey = `${TARGET_PREFIX}${rule.id}:${window.incognito ? 'private' : 'normal'}`
+    const ruleTitle = rule.title.toLocaleLowerCase()
+    const binding = bindings.get(bindingKey)
+    // A rule owns one destination per privacy context, independent of the
+    // source window. Native renames and moves must not switch that destination.
+    const bound =
+      binding?.ruleTitle === ruleTitle
+        ? groups.find(group => group.id === binding.groupId)
+        : undefined
     const matches = groups.filter(
       group =>
-        group.title?.toLocaleLowerCase() === rule.title.toLocaleLowerCase(),
+        group.id !== bound?.id && group.title?.toLocaleLowerCase() === ruleTitle,
     )
-    let target =
-      matches.find(
-        group => group.windowId === tab.windowId && group.color === rule.color,
-      ) ?? matches.find(group => group.windowId === tab.windowId)
-    if (!target && rule.options.merge) {
-      for (const group of matches) {
+    const candidates = [
+      ...(bound ? [bound] : []),
+      ...matches.filter(group => group.color === rule.color),
+      ...matches.filter(group => group.color !== rule.color),
+    ]
+    let target: chrome.tabGroups.TabGroup | undefined
+    for (const group of candidates) {
+      try {
         const targetWindow = await api.windows.get(group.windowId)
-        if (targetWindow.incognito === window.incognito) {
+        if (
+          targetWindow.type === 'normal' &&
+          targetWindow.incognito === window.incognito
+        ) {
           target = group
           break
         }
+      } catch {
+        // A window may close after tabGroups.query; try the remaining groups.
       }
+    }
+    if (target && generation === startupGeneration && Date.now() > restoreUntil) {
+      const nextBinding = { groupId: target.id, ruleTitle }
+      bindings.set(bindingKey, nextBinding)
+      await api.storage.session.set({ [bindingKey]: nextBinding })
     }
     // Respect a manual move/pin while the asynchronous queries were running.
     const latest = await api.tabs.get(tabId)
@@ -151,6 +185,8 @@ export function registerOnceRouter(
     if (target) {
       if (tab.groupId === target.id) return
       if (target.windowId !== tab.windowId) {
+        // Staying in the source window must not create a second destination.
+        if (!rule.options.merge) return
         await api.tabs.move(tabId, { windowId: target.windowId, index: -1 })
       }
       await api.tabs.group({ tabIds: [tabId], groupId: target.id })
@@ -164,6 +200,9 @@ export function registerOnceRouter(
         createProperties: { windowId: tab.windowId },
       })
       await api.tabGroups.update(id, { title: rule.title, color: rule.color })
+      const nextBinding = { groupId: id, ruleTitle }
+      bindings.set(bindingKey, nextBinding)
+      await api.storage.session.set({ [bindingKey]: nextBinding })
     }
   }
 
@@ -212,6 +251,19 @@ export function registerOnceRouter(
       return
     }
     clearTimeout(timers.get(tabId))
+    timers.delete(tabId)
+    if (isNewTabPlaceholder(tab.pendingUrl || tab.url || '')) {
+      if (!record.awaitingNavigation) {
+        record.awaitingNavigation = true
+        await api.storage.session.set({ [PREFIX + tabId]: record })
+      }
+      return
+    }
+    if (record.awaitingNavigation) {
+      record.startedAt = Date.now()
+      delete record.awaitingNavigation
+      await api.storage.session.set({ [PREFIX + tabId]: record })
+    }
     const remaining = Math.max(0, MAX_WAIT_MS - (Date.now() - record.startedAt))
     const delay =
       tab.status === 'complete' ? Math.min(SETTLE_MS, remaining) : remaining
@@ -249,6 +301,10 @@ export function registerOnceRouter(
       if (!pending.has(tabId)) return
       if (changes.groupId !== undefined) {
         const record = pending.get(tabId)!
+        if (record.awaitingNavigation && changes.groupId !== record.initialGroupId) {
+          await forget(tabId)
+          return
+        }
         // Chrome may report inherited group membership AFTER onCreated.
         // Accept that first attachment; further moves are a manual override.
         if (changes.groupId === record.initialGroupId) {
@@ -290,9 +346,12 @@ export function registerOnceRouter(
     // event, and the configuration loader may still be running.
     startupSeen = true
     startupGeneration++
+    const bindingKeys = [...bindings.keys()]
+    bindings.clear()
     restoreUntil = Date.now() + RESTORE_QUIET_MS
     void enqueue(async () => {
       await protectStartup(Date.now())
+      for (const key of bindingKeys) await api.storage.session.remove(key)
       for (const tabId of pending.keys()) await forget(tabId)
     })
   }
@@ -325,6 +384,26 @@ export function registerOnceRouter(
     const existing = await baseline
     const liveIds = new Set(existing.map(tab => tab.id))
     for (const [key, value] of Object.entries(stored)) {
+      if (key.startsWith(TARGET_PREFIX)) {
+        if (
+          hasSession &&
+          !startupSeen &&
+          value &&
+          typeof value === 'object' &&
+          'groupId' in value &&
+          Number.isInteger(value.groupId) &&
+          'ruleTitle' in value &&
+          typeof value.ruleTitle === 'string' &&
+          getGroups().some(
+            rule =>
+              key === `${TARGET_PREFIX}${rule.id}:normal` ||
+              key === `${TARGET_PREFIX}${rule.id}:private`,
+          )
+        ) {
+          bindings.set(key, value as GroupBinding)
+        } else await api.storage.session.remove(key)
+        continue
+      }
       if (key.startsWith(HANDLED_PREFIX)) {
         const tabId = Number(key.slice(HANDLED_PREFIX.length))
         if (Number.isInteger(tabId) && liveIds.has(tabId)) handled.add(tabId)
