@@ -286,33 +286,43 @@ it('routes loaded pages once and waits for a blank tab to receive its first dest
   expect(current.groups.find(group => group.id === current!.tabs.get(2)?.groupId)?.title).toBe('GPT')
 })
 
-it('routes a newly created tab even when Chrome initially inherited another group', async () => {
+it('keeps GPT pages in Coding when they already belong to that group', async () => {
   current = harness([
+    { id: 7, windowId: 1, title: 'GPT', color: 'green', collapsed: false, shared: false },
     {
       id: 8,
-      windowId: 1,
-      title: 'Other',
+      windowId: 2,
+      title: 'Coding',
       color: 'blue',
       collapsed: false,
       shared: false,
     },
   ])
-  const router = current.start()
+  let router = current.start()
   await router.ready
-  current.create(1, { url: 'https://chatgpt.com/', groupId: 8 })
+  current.create(1, { url: 'https://chatgpt.com/', groupId: 8, windowId: 2, active: true })
   await settle(router)
-  expect(
-    current.groups.find(group => group.id === current!.tabs.get(1)?.groupId)
-      ?.title,
-  ).toBe('GPT')
+  expect(current.tabs.get(1)).toMatchObject({ groupId: 8, windowId: 2 })
+  current.update(1, { url: 'https://chatgpt.com/c/coding', title: 'Coding conversation' })
+  router.dispose()
+  router = current.start()
+  await router.ready
+  current.api.tabs.onCreated.emit({ ...current.tabs.get(1)! })
+  await settle(router)
+  expect(current.tabs.get(1)).toMatchObject({ groupId: 8, windowId: 2 })
+  expect(current.groups).toHaveLength(2)
+  expect(current.api.tabs.group).not.toHaveBeenCalled()
+  expect(current.api.tabs.move).not.toHaveBeenCalled()
+  expect(current.api.windows.update).not.toHaveBeenCalled()
 })
 
-it('accepts delayed native group inheritance before and after queued creation processing', async () => {
+it('preserves delayed group inheritance before and after queued creation processing', async () => {
   current = harness([
+    { id: 7, windowId: 2, title: 'GPT', color: 'green', collapsed: false, shared: false },
     {
       id: 8,
       windowId: 1,
-      title: 'Default',
+      title: 'Coding',
       color: 'grey',
       collapsed: false,
       shared: false,
@@ -326,9 +336,10 @@ it('accepts delayed native group inheritance before and after queued creation pr
   await router.idle()
   current.update(2, { groupId: 8, status: 'complete' })
   await settle(router)
-  const gpt = current.groups.find(group => group.title === 'GPT')!
-  expect(current.tabs.get(1)?.groupId).toBe(gpt.id)
-  expect(current.tabs.get(2)?.groupId).toBe(gpt.id)
+  expect(current.tabs.get(1)).toMatchObject({ groupId: 8, windowId: 1 })
+  expect(current.tabs.get(2)).toMatchObject({ groupId: 8, windowId: 1 })
+  expect(current.api.tabs.group).not.toHaveBeenCalled()
+  expect(current.api.tabs.move).not.toHaveBeenCalled()
 })
 
 it('leaves existing tabs and all later navigation, title changes, ungrouping and rule edits alone', async () => {
@@ -608,7 +619,7 @@ it('routes the tab that wakes a sleeping worker even when it is already in the b
     { id: 8, windowId: 1, title: 'Default', color: 'grey', collapsed: false, shared: false },
   ])
   // Chrome has already created the bookmark tab when it starts the worker.
-  const created = current.put(71, { url: 'https://chatgpt.com/c/bookmark', groupId: 8 })
+  const created = current.put(71, { url: 'https://chatgpt.com/c/bookmark', groupId: -1 })
   const router = current.start()
   await router.ready
   current.api.tabs.onCreated.emit({ ...created })
@@ -816,4 +827,80 @@ it('respects a manual group change while a destination binding is being saved', 
   await settle(router)
   expect(current.tabs.get(125)?.groupId).toBe(71)
   expect(current.api.tabs.group).not.toHaveBeenCalled()
+})
+
+it('leaves assigned tabs alone when resuming pending records from the previous version', async () => {
+  current = harness([
+    { id: 7, windowId: 1, title: 'GPT', color: 'green', collapsed: false, shared: false },
+    { id: 8, windowId: 1, title: 'Coding', color: 'blue', collapsed: false, shared: false },
+  ])
+  current.put(130, { url: 'https://chatgpt.com/c/coding', groupId: 8 })
+  current.put(131, { url: 'https://chatgpt.com/c/ungrouped', groupId: -1 })
+  for (const tabId of [130, 131]) {
+    current.stored[`group-once:pending:${tabId}`] = { startedAt: Date.now(), initialGroupId: 8 }
+  }
+  const router = current.start()
+  await router.ready
+  await settle(router)
+  expect(current.tabs.get(130)?.groupId).toBe(8)
+  expect(current.tabs.get(131)?.groupId).toBe(-1)
+  current.update(130, { groupId: -1, url: 'https://chatgpt.com/c/later' })
+  await settle(router)
+  expect(current.tabs.get(130)?.groupId).toBe(-1)
+  expect(current.pendingKeys()).toEqual([])
+  expect(current.api.tabs.group).not.toHaveBeenCalled()
+})
+
+it('retains a group discovered by tabs.get even without a separate group update event', async () => {
+  current = harness([
+    { id: 7, windowId: 1, title: 'GPT', color: 'green', collapsed: false, shared: false },
+    { id: 8, windowId: 1, title: 'Coding', color: 'blue', collapsed: false, shared: false },
+  ])
+  const router = current.start()
+  await router.ready
+  current.create(132, { url: 'https://chatgpt.com/', status: 'loading' })
+  await router.idle()
+  current.tabs.get(132)!.groupId = 8
+  current.update(132, { status: 'complete' })
+  await settle(router)
+  expect(current.tabs.get(132)?.groupId).toBe(8)
+  expect(current.api.tabs.group).not.toHaveBeenCalled()
+})
+
+it('does not regroup a tab assigned and then ungrouped while destination queries are pending', async () => {
+  current = harness([
+    { id: 7, windowId: 1, title: 'GPT', color: 'green', collapsed: false, shared: false },
+    { id: 8, windowId: 1, title: 'Coding', color: 'blue', collapsed: false, shared: false },
+  ])
+  const router = current.start()
+  await router.ready
+  const query = current.api.tabGroups.query.getMockImplementation()!
+  current.api.tabGroups.query.mockImplementationOnce(async () => {
+    current!.update(133, { groupId: 8 })
+    current!.update(133, { groupId: -1 })
+    return query()
+  })
+  current.create(133, { url: 'https://chatgpt.com/' })
+  await settle(router)
+  expect(current.tabs.get(133)?.groupId).toBe(-1)
+  expect(current.api.tabs.group).not.toHaveBeenCalled()
+})
+
+it('retains a group attached while moving an ungrouped tab to another window', async () => {
+  current = harness([
+    { id: 7, windowId: 2, title: 'GPT', color: 'green', collapsed: false, shared: false },
+    { id: 8, windowId: 2, title: 'Coding', color: 'blue', collapsed: false, shared: false },
+  ])
+  const router = current.start()
+  await router.ready
+  const move = current.api.tabs.move.getMockImplementation()!
+  current.api.tabs.move.mockImplementation(async (id, info) => {
+    await move(id, info)
+    current!.update(id, { groupId: 8 })
+  })
+  current.create(134, { url: 'https://chatgpt.com/' })
+  await settle(router)
+  expect(current.tabs.get(134)).toMatchObject({ groupId: 8, windowId: 2 })
+  expect(current.api.tabs.group).not.toHaveBeenCalled()
+  expect(current.api.windows.update).not.toHaveBeenCalled()
 })

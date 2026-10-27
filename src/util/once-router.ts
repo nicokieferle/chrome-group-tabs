@@ -71,7 +71,8 @@ export function createDefaultGroups(nativeGroups: chrome.tabGroups.TabGroup[]) {
 }
 
 /**
- * Decide once after a new tab's first page settles, or after a bounded wait.
+ * Decide once for an ungrouped new tab after its first page settles.
+ * Existing or inherited membership always takes precedence over URL rules.
  * Session storage keeps pending decisions alive across service-worker restarts.
  * Delete a pending record BEFORE grouping so later events are inert.
  */
@@ -81,6 +82,9 @@ export function registerOnceRouter(
 ) {
   const pending = new Map<number, PendingTab>()
   const handled = new Set<number>()
+  // Capture membership synchronously: an assignment may already be awaiting
+  // Chrome queries when a user groups (and possibly ungroups) the tab.
+  const groupedTabs = new Set<number>()
   const bindings = new Map<string, GroupBinding>()
   const timers = new Map<number, ReturnType<typeof setTimeout>>()
   let getGroups: () => GroupConfiguration[] = () => []
@@ -93,6 +97,15 @@ export function registerOnceRouter(
   // restored tabs. On a worker wake-up the tab that triggered onCreated can
   // already appear here, so the snapshot alone must not mark it as handled.
   const baseline = api.tabs.query({})
+
+  function isProtectedTab(tabId: number, tab: chrome.tabs.Tab) {
+    return (
+      groupedTabs.has(tabId) ||
+      tab.groupId !== -1 ||
+      tab.pinned ||
+      (tab.splitViewId !== undefined && tab.splitViewId !== -1)
+    )
+  }
 
   function enqueue(task: () => Promise<void>) {
     queue = queue
@@ -127,7 +140,11 @@ export function registerOnceRouter(
   ) {
     const generation = startupGeneration
     let tab = await api.tabs.get(tabId)
-    if (tab.groupId !== expected.groupId || tab.windowId !== expected.windowId)
+    if (
+      isProtectedTab(tabId, tab) ||
+      expected.groupId !== -1 ||
+      tab.windowId !== expected.windowId
+    )
       return
     const window = await api.windows.get(tab.windowId)
     if (window.type !== 'normal') return
@@ -173,11 +190,9 @@ export function registerOnceRouter(
     // Respect a manual move/pin while the asynchronous queries were running.
     const latest = await api.tabs.get(tabId)
     if (
-      latest.pinned ||
+      isProtectedTab(tabId, latest) ||
       generation !== startupGeneration ||
       Date.now() <= restoreUntil ||
-      (latest.splitViewId !== undefined && latest.splitViewId !== -1) ||
-      latest.groupId !== tab.groupId ||
       latest.windowId !== tab.windowId
     )
       return
@@ -188,6 +203,14 @@ export function registerOnceRouter(
         // Staying in the source window must not create a second destination.
         if (!rule.options.merge) return
         await api.tabs.move(tabId, { windowId: target.windowId, index: -1 })
+        const moved = await api.tabs.get(tabId)
+        if (
+          isProtectedTab(tabId, moved) ||
+          moved.windowId !== target.windowId ||
+          generation !== startupGeneration ||
+          Date.now() <= restoreUntil
+        )
+          return
       }
       await api.tabs.group({ tabIds: [tabId], groupId: target.id })
       if (tab.active && target.windowId !== tab.windowId) {
@@ -219,9 +242,8 @@ export function registerOnceRouter(
     await forget(tabId)
     if (
       record.startedAt <= restoreUntil ||
-      tab.pinned ||
-      tab.groupId !== record.initialGroupId ||
-      (tab.splitViewId !== undefined && tab.splitViewId !== -1)
+      record.initialGroupId !== -1 ||
+      isProtectedTab(tabId, tab)
     )
       return
     const rule = matchNewTab(tab, getGroups())
@@ -238,15 +260,8 @@ export function registerOnceRouter(
       await forget(tabId)
       return
     }
-    if (record.initialGroupId === -1 && tab.groupId !== -1) {
-      record.initialGroupId = tab.groupId
-      await api.storage.session.set({ [PREFIX + tabId]: record })
-    }
-    if (
-      tab.pinned ||
-      tab.groupId !== record.initialGroupId ||
-      (tab.splitViewId !== undefined && tab.splitViewId !== -1)
-    ) {
+    // Also cancel old pending records which accepted an inherited group.
+    if (record.initialGroupId !== -1 || isProtectedTab(tabId, tab)) {
       await forget(tabId)
       return
     }
@@ -278,6 +293,7 @@ export function registerOnceRouter(
   const onCreated = (tab: chrome.tabs.Tab) => {
     if (tab.id === undefined) return
     const tabId = tab.id
+    if (tab.groupId !== -1) groupedTabs.add(tabId)
     const record = { startedAt: Date.now(), initialGroupId: tab.groupId }
     void enqueue(async () => {
       if (handled.has(tabId)) return
@@ -287,7 +303,7 @@ export function registerOnceRouter(
         return
       }
       // Lazy session restoration can happen after the initial startup burst.
-      if (tab.discarded || tab.status === 'unloaded') {
+      if (tab.groupId !== -1 || tab.discarded || tab.status === 'unloaded') {
         await forget(tabId)
         return
       }
@@ -297,25 +313,13 @@ export function registerOnceRouter(
     })
   }
   const onUpdated = (tabId: number, changes: chrome.tabs.OnUpdatedInfo) => {
+    if (changes.groupId !== undefined && changes.groupId !== -1)
+      groupedTabs.add(tabId)
     void enqueue(async () => {
       if (!pending.has(tabId)) return
       if (changes.groupId !== undefined) {
-        const record = pending.get(tabId)!
-        if (record.awaitingNavigation && changes.groupId !== record.initialGroupId) {
-          await forget(tabId)
-          return
-        }
-        // Chrome may report inherited group membership AFTER onCreated.
-        // Accept that first attachment; further moves are a manual override.
-        if (changes.groupId === record.initialGroupId) {
-          await schedule(tabId)
-        } else if (record.initialGroupId === -1 && changes.groupId !== -1) {
-          record.initialGroupId = changes.groupId
-          await api.storage.session.set({ [PREFIX + tabId]: record })
-          await schedule(tabId)
-        } else {
-          await forget(tabId)
-        }
+        if (changes.groupId !== -1) await forget(tabId)
+        else await schedule(tabId)
         return
       }
       if (changes.pinned === true) {
@@ -332,6 +336,7 @@ export function registerOnceRouter(
     })
   }
   const onRemoved = (tabId: number) => {
+    groupedTabs.delete(tabId)
     void enqueue(async () => {
       await forget(tabId)
       handled.delete(tabId)
