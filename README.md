@@ -4,6 +4,23 @@ Persönlicher MIT-lizenzierter Fork von [loilo/auto-group-tabs](https://github.c
 
 ## Einstellungen ab Version 0.2.0
 
+Version **0.3.0** ergänzt namenlose Gruppen, manuelle Gruppen ohne URL-Regel, „Dauerhaft offen halten“ und ein neues Tabgruppen-Icon für Toolbar, Einstellungen und Start-Tabs.
+
+### Manuelle und dauerhaft offene Gruppen
+
+- **Name optional:** Ein leeres Namensfeld erzeugt eine native Chrome-Gruppe ohne Text, nur mit dem Farbpunkt. „Ohne Namen“ ist lediglich die Beschriftung in der Erweiterung.
+- **Gruppe ohne Regel:** Mit „+ Gruppe ohne Regel“ eine manuelle Gruppe anlegen. Sie fängt keine URLs ab. „Neue Tabs automatisch zuordnen“ kann pro Gruppe separat ein- oder ausgeschaltet werden. Automatische Gruppen benötigen weiterhin mindestens ein gültiges URL-Muster.
+- **Dauerhaft offen halten:** Die Gruppe erhält einen eigenen Start-Tab, damit sie auch ohne weitere Seiten offen bleibt. Er wird bei Bedarf ersetzt bzw. die Gruppe nach dem Schließen neu geöffnet, solange Chrome ein normales Fenster offen hat. Es werden keine zusätzlichen Browserfenster erzeugt. Das Ausschalten der Option oder das Entfernen der Konfiguration beendet das Offenhalten, ohne die vorhandenen Tabs zu schließen. Neue manuelle Gruppen haben diese Option zunächst eingeschaltet.
+- **Öffnen:** Nach dem Speichern lässt sich jede Gruppe in Einstellungen oder Popup mit „Gruppe öffnen“ bzw. „Öffnen“ öffnen. Eine bereits offene Gruppe wird wiederverwendet und in den Vordergrund geholt. Änderungen im Entwurf werden erst nach dem Speichern verwendet.
+- **Stabile Identität:** Der eigene Start-Tab trägt die Konfigurations-ID. Dadurch lassen sich auch mehrere namenlose Gruppen derselben Farbe nach einem vollständigen Chrome-Neustart eindeutig wiederfinden. Weitere Fenster erzeugen keine Kopien. Normale und private Gruppen bleiben getrennt; eine private Gruppe wird nur auf ausdrückliche Anforderung geöffnet.
+- **Manuelle Änderungen:** Bereits zugeordnete Nutzer-Tabs werden weiterhin nie automatisch umsortiert. Wird der Start-Tab selbst manuell entgruppiert, respektiert die Erweiterung das und wartet, bis er wieder einer Gruppe zugeordnet oder geschlossen wird. Manuell umbenannte Gruppen behalten ihren nativen Namen. Name und Farbe in den Einstellungen gelten beim Anlegen einer neuen Gruppe.
+
+Der Start-Tab bietet ein Adressfeld: Eine eingegebene Adresse öffnet sich im selben Tab und bleibt in dieser Gruppe. Suchbegriffe öffnen eine Google-Suche. Bei aktivem Offenhalten ergänzt die Erweiterung anschließend wieder einen Start-Tab. Bis zu einer solchen Nutzeraktion sendet die Oberfläche keine externen Netzwerkanfragen.
+
+Gruppen, Konfigurations-IDs und Sicherungen aus älteren Versionen bleiben erhalten. Das bestehende Backupformat akzeptiert nun auch leere Gruppennamen und leere Matcher-Listen; `options.keepOpen` ist optional und bei alten Regeln ausgeschaltet.
+
+### Bisherige Korrekturen
+
 Version **0.2.3** schützt bereits zugeordnete Tabs konsequent. Ein ChatGPT-Tab in **Coding** bleibt in Coding, auch wenn eine passende GPT-Regel und eine eigene GPT-Gruppe vorhanden sind. Das gilt auch bei geerbter oder verzögert gemeldeter Gruppenzugehörigkeit und beim Aufwachen des Hintergrundprozesses. Sobald eine Gruppierung beobachtet wird, endet die automatische Erstzuordnung. Alte offene Entscheidungen, die bereits gruppierte Tabs akzeptiert hatten, werden verworfen.
 
 Version **0.2.2** verhindert zusätzliche Gruppenkopien durch neue Fenster. Leere Tabs warten auf den ersten Seitenaufruf. Jede Regel bindet sich innerhalb der Browsersitzung an eine feste native Gruppen-ID, getrennt für normale und private Fenster. Die Fensteroption steuert das Verschieben zur Zielgruppe; sie legt keine weiteren Gruppen pro Fenster mehr an. Bereits vorhandene doppelte Gruppen werden nicht automatisch zusammengeführt.
@@ -40,7 +57,7 @@ Fensterübergreifende Zuordnung verschiebt einen passenden neuen Tab bei Bedarf 
 
 Chrome meldet auch wiederhergestellte Tabs über `tabs.onCreated`. Der Hintergrund schützt deshalb die Startphase, bis drei Sekunden lang kein weiterer Tab erstellt wurde. Während dieser Phase selbst neu geöffnete Tabs bleiben ebenfalls unverändert. Bereits verworfene oder nicht geladene Wiederherstellungstabs bleiben auch bei späteren Meldungen geschützt.
 
-Tab- und Gruppen-IDs gelten nur innerhalb einer Browsersitzung. Nach einem vollständigen Neustart bleibt die von Chrome wiederhergestellte Gruppierung maßgeblich; alte numerische IDs und Zielgruppen-Bindungen werden nicht weiterverwendet. Neue Zuordnungen finden die Zielgruppe wieder anhand des konfigurierten Namens. Ein ungewöhnlich spät wiederhergestellter, bereits geladener Tab ist von einem tatsächlich neuen Tab nicht sicher unterscheidbar. Die Pause ist keine dauerhafte Identitätsgarantie. Es werden keine Gruppen oder Tabs aus eigenen Kopien wiederhergestellt.
+Tab- und Gruppen-IDs gelten nur innerhalb einer Browsersitzung. Nach einem vollständigen Neustart bleibt die von Chrome wiederhergestellte Gruppierung maßgeblich; alte numerische IDs und Zielgruppen-Bindungen werden nicht weiterverwendet. Gruppen mit eigenem Start-Tab werden über dessen Konfigurations-ID wiedererkannt. Andere neue Zuordnungen finden die Zielgruppe anhand des konfigurierten Namens, bei namenlosen Gruppen anhand von Farbe und freier Bindung. Ein ungewöhnlich spät wiederhergestellter, bereits geladener Tab ist von einem tatsächlich neuen Tab nicht sicher unterscheidbar. Die Pause ist keine dauerhafte Identitätsgarantie. Nutzer-Seiten werden weder dupliziert noch aus eigenen Kopien wiederhergestellt; nur ausdrücklich dauerhaft offene Gruppen erhalten bei Bedarf einen neuen eigenen Start-Tab.
 
 ## Installation und Update
 

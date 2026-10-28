@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gruppe offen · Once</title>
+    <link rel="icon" href="icons/icon32.png" />
+    <link rel="stylesheet" href="group-anchor.css" />
+  </head>
+  <body>
+    <main>
+      <img src="icons/icon.svg" alt="" width="64" height="64" />
+      <p class="eyebrow">DEINE TABGRUPPE</p>
+      <h1 id="group-title">Gruppe ohne Namen</h1>
+      <p>Ein fester Platz für deine Tabs.</p>
+      <form id="open-page">
+        <label for="address">Seite in dieser Gruppe öffnen</label>
+        <div class="address-row">
+          <input
+            id="address"
+            type="text"
+            placeholder="Adresse oder Suchbegriff"
+            autocomplete="off"
+            required
+          />
+          <button type="submit" aria-label="Seite öffnen">↗</button>
+        </div>
+      </form>
+      <p class="hint">
+        Dieser Start-Tab hält die Gruppe offen. Du kannst das in den Einstellungen
+        ausschalten.
+      </p>
+      <button id="settings" class="settings" type="button">
+        Einstellungen öffnen
+      </button>
+    </main>
+    <script src="group-anchor.js"></script>
+  </body>
+</html>

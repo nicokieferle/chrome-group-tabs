@@ -5,9 +5,17 @@ import { colors } from '@/util/resources'
 import type { RuleDraft } from '@/util/once-settings'
 
 const rule = defineModel<RuleDraft>({ required: true })
-defineProps<{ position: number; total: number; disabled: boolean }>()
-defineEmits<{ move: [direction: number]; remove: [] }>()
-const catchAll = computed(() => lines(rule.value.patterns).includes('*'))
+defineProps<{
+  position: number
+  total: number
+  disabled: boolean
+  canOpen: boolean
+  hasLaterAutomatic: boolean
+}>()
+defineEmits<{ move: [direction: number]; remove: []; open: [] }>()
+const catchAll = computed(
+  () => rule.value.automatic && lines(rule.value.patterns).includes('*'),
+)
 const colorNames = {
   grey: 'Grau',
   blue: 'Blau',
@@ -24,14 +32,16 @@ const colorNames = {
 <template>
   <article
     class="panel rule-card"
-    :aria-label="`Regel ${position}: ${rule.title || 'Neue Regel'}`"
+    :aria-label="`Gruppe ${position}: ${rule.title || 'Ohne Namen'}`"
     :style="`--rule-color: var(--group-${rule.color})`"
   >
     <div class="rule-card-heading">
       <div class="rule-heading-label">
         <span class="rule-number">{{ position.toString().padStart(2, '0') }}</span>
-        <h3>{{ rule.title || 'Neue Regel' }}</h3>
+        <h3>{{ rule.title || 'Ohne Namen' }}</h3>
         <span v-if="catchAll" class="rule-badge">Auffangregel</span>
+        <span v-if="!rule.automatic" class="rule-badge">Ohne Regel</span>
+        <span v-if="rule.keepOpen" class="rule-badge">Dauerhaft offen</span>
       </div>
       <div class="rule-actions">
         <button
@@ -71,9 +81,10 @@ const colorNames = {
             :id="`${rule.id}-title`"
             v-model="rule.title"
             type="text"
-            placeholder="Gruppenname"
+            placeholder="Ohne Namen (optional)"
             autocomplete="off"
           />
+          <p class="field-help">Leer lassen für eine Gruppe nur mit Farbpunkt.</p>
         </div>
         <div>
           <span class="field-label" :id="`${rule.id}-colors`">
@@ -103,7 +114,22 @@ const colorNames = {
           </div>
         </div>
       </div>
-      <div class="rule-field">
+      <div class="group-options">
+        <label class="toggle-label">
+          <input v-model="rule.automatic" type="checkbox" />
+          Neue Tabs automatisch zuordnen
+        </label>
+        <label class="toggle-label">
+          <input v-model="rule.keepOpen" type="checkbox" />
+          Dauerhaft offen halten
+        </label>
+        <p class="field-help">
+          Dauerhaft offene Gruppen behalten einen Start-Tab. Weitere Fenster öffnen
+          keine Kopie. Ausschalten beendet das Offenhalten, ohne deine Tabs zu
+          schließen.
+        </p>
+      </div>
+      <div v-if="rule.automatic" class="rule-field">
         <label :for="`${rule.id}-patterns`">URL-Muster</label>
         <textarea
           :id="`${rule.id}-patterns`"
@@ -119,11 +145,11 @@ const colorNames = {
           Seitenaufruf.
         </p>
       </div>
-      <p v-if="catchAll && position < total" class="inline-warning">
+      <p v-if="catchAll && hasLaterAutomatic" class="inline-warning">
         Diese Auffangregel kann spätere Regeln überdecken. Sie steht üblicherweise
         zuletzt.
       </p>
-      <div class="rule-secondary-fields">
+      <div v-if="rule.automatic" class="rule-secondary-fields">
         <div>
           <label :for="`${rule.id}-exclude`">
             Titel-Ausnahmen
@@ -153,6 +179,23 @@ const colorNames = {
             behalten ihre Farbe.
           </p>
         </div>
+      </div>
+      <div class="group-open-action">
+        <button
+          class="button secondary"
+          type="button"
+          :disabled="!canOpen"
+          @click="$emit('open')"
+        >
+          Gruppe öffnen
+        </button>
+        <span class="small muted">
+          {{
+            canOpen
+              ? 'Verwendet die vorhandene Gruppe, falls sie offen ist.'
+              : 'Zum Öffnen zuerst die Änderungen speichern.'
+          }}
+        </span>
       </div>
     </fieldset>
   </article>

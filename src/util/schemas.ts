@@ -6,6 +6,7 @@ export const SaveOptionsSchema = z.object({
   strict: z.boolean().default(false),
   merge: z.boolean().default(false),
   excludedTitles: z.array(z.string()).optional(),
+  keepOpen: z.boolean().optional(),
 })
 
 const matcherPatternRegex = new RegExp(inputPattern)
@@ -19,10 +20,7 @@ export const GroupConfigurationSchema = z.object({
     .array(
       z
         .string()
-        .refine(
-          pattern => matcherPatternRegex.test(pattern),
-          'Invalid URL Pattern',
-        ),
+        .refine(pattern => matcherPatternRegex.test(pattern), 'Invalid URL Pattern'),
     )
     .refine(
       matchers => new Set(matchers).size === matchers.length,

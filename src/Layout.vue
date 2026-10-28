@@ -169,26 +169,9 @@ code {
   margin-left: 3px;
 }
 .brand-icon {
-  position: relative;
-  display: flex;
-  align-items: end;
-  gap: 3px;
-  width: 25px;
-  height: 24px;
-}
-.brand-icon i {
-  width: 6px;
-  border-radius: 3px;
-  background: var(--accent);
-  height: 18px;
-}
-.brand-icon i:nth-child(2) {
-  height: 24px;
-  opacity: 0.7;
-}
-.brand-icon i:nth-child(3) {
-  height: 14px;
-  opacity: 0.45;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
 }
 .version-tag {
   color: #8d999f;
@@ -288,6 +271,49 @@ code {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
+}
+.add-group-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.section-heading {
+  flex-wrap: wrap;
+}
+.group-options {
+  margin: 24px 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #141b20;
+}
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  cursor: pointer;
+}
+.toggle-label input[type='checkbox'] {
+  width: 17px;
+  height: 17px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 17px;
+  accent-color: var(--accent);
+}
+.group-open-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 24px;
+}
+.popup-open {
+  padding: 6px 9px;
+  font-size: 10px;
+  flex-shrink: 0;
 }
 .rule-card {
   margin-bottom: 17px;

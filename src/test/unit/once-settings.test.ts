@@ -9,6 +9,7 @@ import {
   previewRule,
   toDrafts,
   toRules,
+  newManualGroup,
 } from '@/util/once-settings'
 
 it('reads existing compressed, serialized and uncompressed configurations without losing custom settings', () => {
@@ -62,14 +63,23 @@ it('uses the actual once router for draft preview including title exclusions and
   expect(previewRule(drafts, '', '')).toBeUndefined()
 })
 
-it('validates URL patterns, regex syntax, required names, and missing patterns before saving', () => {
+it('validates automatic URL patterns while allowing groups without names or rules', () => {
   const drafts = defaultDrafts()
   drafts[0]!.patterns = '/[invalid/'
   expect(() => toRules(drafts)).toThrow('ungültig')
   drafts[0]!.patterns = ''
   expect(() => toRules(drafts)).toThrow('mindestens ein URL-Muster')
   drafts[0]!.title = ' '
-  expect(() => toRules(drafts)).toThrow('Gruppennamen')
+  drafts[0]!.patterns = 'https://chatgpt.com/*'
+  expect(toRules(drafts)[0]!.title).toBe('')
+  const manual = newManualGroup()
+  expect(toRules([manual])[0]).toMatchObject({
+    title: '',
+    matchers: [],
+    options: { keepOpen: true },
+  })
+  expect(previewRule([manual], 'https://chatgpt.com/', '')).toBeUndefined()
+  expect(importRules(exportRules(toRules([manual])))).toEqual(toRules([manual]))
 })
 
 it('keeps textarea line breaks while editing and normalizes duplicate lines only on save', () => {

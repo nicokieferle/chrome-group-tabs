@@ -4,12 +4,14 @@ import Layout from './Layout.vue'
 import OnceRuleEditor from './components/OnceRuleEditor.vue'
 import manifest from './manifest/manifest.base'
 import { isNewTabPlaceholder } from './util/once-router'
+import { openSavedGroup } from './util/open-group'
 import { useOnceSettings } from './composables/use-once-settings'
 import {
   defaultDrafts,
   exportRules,
   importRules,
   newRule,
+  newManualGroup,
   previewRule,
   toDrafts,
 } from './util/once-settings'
@@ -31,6 +33,18 @@ const testUrl = ref('https://chatgpt.com/')
 const testTitle = ref('')
 const fileInput = ref<HTMLInputElement>()
 const restoringDefaults = ref(false)
+const opening = ref(false)
+async function openGroup(id: string) {
+  opening.value = true
+  error.value = ''
+  try {
+    await openSavedGroup(id)
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : 'Öffnen fehlgeschlagen.'
+  } finally {
+    opening.value = false
+  }
+}
 function beforeUnload(event: BeforeUnloadEvent) {
   if (dirty.value) {
     event.preventDefault()
@@ -99,11 +113,7 @@ function restoreDefaults() {
     <div class="settings-page">
       <header class="page-header">
         <div class="brand">
-          <span class="brand-icon" aria-hidden="true">
-            <i></i>
-            <i></i>
-            <i></i>
-          </span>
+          <img class="brand-icon" src="/icons/icon.svg" alt="" />
           <span>
             Tabgruppen
             <b>Once</b>
@@ -166,19 +176,29 @@ function restoreDefaults() {
               <div class="section-heading">
                 <div>
                   <h2 id="rules-heading">
-                    Zuordnungsregeln
+                    Gruppen &amp; Regeln
                     <span class="count">{{ drafts.length }}</span>
                   </h2>
                   <p>Von oben nach unten. Die erste passende Regel entscheidet.</p>
                 </div>
-                <button
-                  class="button secondary"
-                  type="button"
-                  :disabled="saving"
-                  @click="drafts.push(newRule())"
-                >
-                  + Regel hinzufügen
-                </button>
+                <div class="add-group-actions">
+                  <button
+                    class="button secondary"
+                    type="button"
+                    :disabled="saving"
+                    @click="drafts.push(newManualGroup())"
+                  >
+                    + Gruppe ohne Regel
+                  </button>
+                  <button
+                    class="button secondary"
+                    type="button"
+                    :disabled="saving"
+                    @click="drafts.push(newRule())"
+                  >
+                    + Regel hinzufügen
+                  </button>
+                </div>
               </div>
               <div v-if="!drafts.length" class="panel empty-state">
                 <h3>Noch keine Regeln</h3>
@@ -194,6 +214,11 @@ function restoreDefaults() {
                 :position="index + 1"
                 :total="drafts.length"
                 :disabled="saving"
+                :can-open="!dirty && !opening && !saving"
+                :has-later-automatic="
+                  drafts.slice(index + 1).some(item => item.automatic)
+                "
+                @open="openGroup(rule.id)"
                 @move="moveRule(index, $event)"
                 @remove="drafts.splice(index, 1)"
               />
@@ -202,7 +227,7 @@ function restoreDefaults() {
               <section class="panel preview-panel" aria-labelledby="preview-heading">
                 <span class="eyebrow">VORSCHAU</span>
                 <h2 id="preview-heading">Wohin kommt der Tab?</h2>
-                <p>Probiere deinen aktuellen Entwurf aus.</p>
+                <p>Probiere die Zuordnung für einen neuen, ungruppierten Tab aus.</p>
                 <label for="test-url">Adresse des neuen Tabs</label>
                 <input
                   id="test-url"
@@ -239,7 +264,7 @@ function restoreDefaults() {
                         class="group-dot"
                         :style="`--dot-color: var(--group-${preview.rule.color})`"
                       ></span>
-                      {{ preview.rule.title }}
+                      {{ preview.rule.title || 'Ohne Namen' }}
                     </strong>
                     <span class="muted">
                       {{
