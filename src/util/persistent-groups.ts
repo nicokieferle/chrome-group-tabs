@@ -104,7 +104,6 @@ export function registerPersistentGroups(
     if (!anchor) {
       const created = await api.tabs.create({
         windowId: target?.windowId ?? window.id,
-        index: -1,
         url: `${base}?group=${encodeURIComponent(rule.id)}`,
         active: false,
       })
