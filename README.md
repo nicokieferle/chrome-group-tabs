@@ -4,6 +4,8 @@ Persönlicher MIT-lizenzierter Fork von [loilo/auto-group-tabs](https://github.c
 
 ## Einstellungen ab Version 0.2.0
 
+Version **0.3.1** behebt den ungültigen Tab-Index beim Öffnen von Gruppen und beim Erstellen ihrer Start-Tabs. Der Aufruf von `tabs.create` lässt die optionale Position jetzt weg; die Tests prüfen die Chrome-Vorgabe, dass ein ausdrücklich angegebener Index eine ganze Zahl ab null sein muss.
+
 Version **0.3.0** ergänzt namenlose Gruppen, manuelle Gruppen ohne URL-Regel, „Dauerhaft offen halten“ und ein neues Tabgruppen-Icon für Toolbar, Einstellungen und Start-Tabs.
 
 ### Manuelle und dauerhaft offene Gruppen

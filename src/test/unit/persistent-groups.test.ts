@@ -46,6 +46,12 @@ function harness(config = toRules([newManualGroup()])) {
         return { ...tabs.get(id)! }
       }),
       create: vi.fn(async (info: any) => {
+        // Chrome validates this optional position before creating a tab.
+        if (
+          info.index !== undefined &&
+          (!Number.isInteger(info.index) || info.index < 0)
+        )
+          throw new TypeError('tabs.create: index must be an integer at least 0')
         const tab = put(nextTab++, {
           ...info,
           incognito: windows.find(window => window.id === info.windowId)!.incognito,
