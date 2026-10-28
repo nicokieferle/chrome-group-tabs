@@ -1,8 +1,10 @@
 # Tabgruppen · Once
 
-Persönlicher MIT-lizenzierter Fork von [loilo/auto-group-tabs](https://github.com/loilo/auto-group-tabs), ursprünglich auf Version 0.0.24 (`c354e34`) aufgebaut. Diese Erweiterung ordnet **neue Tabs einmalig** einer nativen Chrome-Gruppe zu. Danach bleiben Navigation und manuelles Verschieben ohne automatische Neuzuordnung.
+Persönlicher MIT-lizenzierter Fork von [loilo/auto-group-tabs](https://github.com/loilo/auto-group-tabs), ursprünglich auf Version 0.0.24 (`c354e34`) aufgebaut. Diese Erweiterung ordnet **neue, ungruppierte Tabs einmalig** einer nativen Chrome-Gruppe zu. Bereits vorhandene oder geerbte Gruppen haben immer Vorrang vor URL-Regeln. Danach bleiben Navigation und manuelles Verschieben ohne automatische Neuzuordnung.
 
 ## Einstellungen ab Version 0.2.0
+
+Version **0.2.3** schützt bereits zugeordnete Tabs konsequent. Ein ChatGPT-Tab in **Coding** bleibt in Coding, auch wenn eine passende GPT-Regel und eine eigene GPT-Gruppe vorhanden sind. Das gilt auch bei geerbter oder verzögert gemeldeter Gruppenzugehörigkeit und beim Aufwachen des Hintergrundprozesses. Sobald eine Gruppierung beobachtet wird, endet die automatische Erstzuordnung. Alte offene Entscheidungen, die bereits gruppierte Tabs akzeptiert hatten, werden verworfen.
 
 Version **0.2.2** verhindert zusätzliche Gruppenkopien durch neue Fenster. Leere Tabs warten auf den ersten Seitenaufruf. Jede Regel bindet sich innerhalb der Browsersitzung an eine feste native Gruppen-ID, getrennt für normale und private Fenster. Die Fensteroption steuert das Verschieben zur Zielgruppe; sie legt keine weiteren Gruppen pro Fenster mehr an. Bereits vorhandene doppelte Gruppen werden nicht automatisch zusammengeführt.
 
@@ -23,8 +25,8 @@ Bereits gespeicherte Gruppen, IDs, Farben, Muster, Titel-Ausnahmen und Fensterop
 
 ## Standardverhalten
 
-1. Neue ChatGPT-Tabs (`https://chatgpt.com/*`, `https://chat.openai.com/*`) kommen in **GPT**. Die GPT-Standardregel darf neue Tabs dafür auch in ein anderes normales Fenster verschieben.
-2. Alle anderen neuen Seiten werden **Default** zugeordnet. Die Default-Standardregel lässt Tabs in ihrem Fenster. Liegt die feste Default-Gruppe in einem anderen Fenster, bleibt der Tab ohne neue Zuordnung hier; es entsteht keine zweite Default-Gruppe. Für eine gemeinsame Default-Gruppe samt Tab-Verschiebung „Bestehende Gruppe auch in anderen Fenstern“ wählen und speichern.
+1. Neue, ungruppierte ChatGPT-Tabs (`https://chatgpt.com/*`, `https://chat.openai.com/*`) kommen in **GPT**. Die GPT-Standardregel darf diese Tabs dafür auch in ein anderes normales Fenster verschieben. Ein Tab, der bereits in Coding, Default oder einer anderen Gruppe liegt, bleibt dort. Auch neue Tabs mit geerbter Gruppenzugehörigkeit werden nicht umsortiert.
+2. Alle anderen neuen, ungruppierten Seiten werden **Default** zugeordnet. Die Default-Standardregel lässt Tabs in ihrem Fenster. Liegt die feste Default-Gruppe in einem anderen Fenster, bleibt der Tab ohne neue Zuordnung hier; es entsteht keine zweite Default-Gruppe. Für eine gemeinsame Default-Gruppe samt Tab-Verschiebung „Bestehende Gruppe auch in anderen Fenstern“ wählen und speichern.
 3. Leere Tabs (`chrome://newtab/`, `about:blank` oder noch ohne Adresse) erzeugen keine Gruppe und werden nicht in ein anderes Fenster verschoben. Sie warten auch über das Einschlafen des Hintergrundprozesses hinweg auf den ersten Seitenaufruf.
 4. URL und Titel werden nach dem ersten Laden geprüft, sobald sie kurz stabil sind; bei dauerhaftem Laden spätestens zwölf Sekunden nach der ersten Zieladresse. Danach wird der Tab nicht erneut einsortiert. Spätere Navigation und manuelles Verschieben bleiben unverändert.
 

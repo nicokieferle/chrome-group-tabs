@@ -80,7 +80,8 @@ async function openSettings() {
           </li>
         </ol>
         <p class="popup-note">
-          Bestehende Tabs und deine manuelle Gruppierung bleiben erhalten.
+          Bereits gruppierte Tabs bleiben in ihrer Gruppe. Regeln gelten nur für
+          neue, ungruppierte Tabs.
         </p>
       </template>
       <button

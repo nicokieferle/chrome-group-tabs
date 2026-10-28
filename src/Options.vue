@@ -259,6 +259,11 @@ function restoreDefaults() {
               <section class="help-panel" aria-labelledby="behavior-heading">
                 <h3 id="behavior-heading">So arbeitet Once</h3>
                 <p>
+                  Bereits gruppierte Tabs bleiben in ihrer Gruppe. Auch neue Tabs,
+                  die eine Gruppe übernehmen, werden nicht umsortiert. Regeln gelten
+                  nur für neue, ungruppierte Tabs.
+                </p>
+                <p>
                   Leere neue Tabs warten auf den ersten Seitenaufruf. Dann werden URL
                   und Titel einmal geprüft. Spätere Navigation und manuelles
                   Verschieben lösen keine neue Zuordnung aus.
