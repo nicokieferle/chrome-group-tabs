@@ -11,6 +11,8 @@ export type RuleDraft = {
   patterns: string
   excludedTitles: string
   merge: boolean
+  automatic: boolean
+  keepOpen: boolean
 }
 
 export function lines(text: string) {
@@ -49,21 +51,22 @@ export function toDrafts(rules: GroupConfiguration[]): RuleDraft[] {
     patterns: rule.matchers.join('\n'),
     excludedTitles: (rule.options.excludedTitles ?? []).join('\n'),
     merge: rule.options.merge,
+    automatic: rule.matchers.length > 0,
+    keepOpen: Boolean(rule.options.keepOpen),
   }))
 }
 
 export function toRules(drafts: RuleDraft[]): GroupConfiguration[] {
   const rules = drafts.map((draft, index) => {
-    if (!draft.title.trim())
-      throw new Error(`Regel ${index + 1}: Bitte einen Gruppennamen eingeben.`)
-    const matchers = lines(draft.patterns)
-    if (!matchers.length)
-      throw new Error(`${draft.title}: Bitte mindestens ein URL-Muster eingeben.`)
+    const label = draft.title.trim() || `Gruppe ${index + 1}`
+    const matchers = draft.automatic ? lines(draft.patterns) : []
+    if (draft.automatic && !matchers.length)
+      throw new Error(`${label}: Bitte mindestens ein URL-Muster eingeben.`)
     for (const pattern of matchers) {
       try {
         generateMatcherRegex(pattern)
       } catch {
-        throw new Error(`${draft.title}: Das URL-Muster „${pattern}“ ist ungültig.`)
+        throw new Error(`${label}: Das URL-Muster „${pattern}“ ist ungültig.`)
       }
     }
     return {
@@ -76,6 +79,7 @@ export function toRules(drafts: RuleDraft[]): GroupConfiguration[] {
         strict: false,
         merge: draft.merge,
         excludedTitles: lines(draft.excludedTitles),
+        keepOpen: draft.keepOpen,
       },
     }
   })
@@ -90,7 +94,13 @@ export function newRule(): RuleDraft {
     patterns: '',
     excludedTitles: '',
     merge: false,
+    automatic: true,
+    keepOpen: false,
   }
+}
+
+export function newManualGroup(): RuleDraft {
+  return { ...newRule(), automatic: false, keepOpen: true }
 }
 
 export function defaultDrafts() {

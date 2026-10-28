@@ -77,7 +77,7 @@ export function useOnceSettings() {
       drafts.value = toDrafts(rules)
       baseline.value = JSON.stringify(drafts.value)
       changedElsewhere.value = false
-      notice.value = 'Gespeichert. Die Regeln gelten für künftig geöffnete Tabs.'
+      notice.value = 'Gespeichert. Gruppen und Regeln sind übernommen.'
     } catch (cause) {
       error.value =
         cause instanceof Error

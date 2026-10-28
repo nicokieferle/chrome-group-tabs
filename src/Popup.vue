@@ -2,8 +2,24 @@
 import Layout from './Layout.vue'
 import manifest from './manifest/manifest.base'
 import { useOnceSettings } from './composables/use-once-settings'
+import { openSavedGroup } from './util/open-group'
+import { computed, ref } from 'vue'
 
 const { savedRules, loading, error } = useOnceSettings()
+const automaticCount = computed(
+  () => savedRules.value.filter(rule => rule.matchers.length).length,
+)
+const opening = ref(false)
+async function openGroup(id: string) {
+  opening.value = true
+  try {
+    await openSavedGroup(id)
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : 'Öffnen fehlgeschlagen.'
+  } finally {
+    opening.value = false
+  }
+}
 async function openSettings() {
   try {
     if (typeof globalThis.chrome?.runtime?.openOptionsPage === 'function') {
@@ -22,11 +38,7 @@ async function openSettings() {
     <main class="popup-page">
       <header class="popup-header">
         <div class="brand">
-          <span class="brand-icon" aria-hidden="true">
-            <i></i>
-            <i></i>
-            <i></i>
-          </span>
+          <img class="brand-icon" src="/icons/icon.svg" alt="" />
           <span>
             Tabgruppen
             <b>Once</b>
@@ -46,11 +58,11 @@ async function openSettings() {
       <div v-else-if="error" class="message error" role="alert">{{ error }}</div>
       <template v-else>
         <div class="popup-status">
-          <i class="status-dot" :class="{ inactive: !savedRules.length }"></i>
+          <i class="status-dot" :class="{ inactive: !automaticCount }"></i>
           {{
-            savedRules.length
+            automaticCount
               ? 'Zuordnung für neue Tabs aktiv'
-              : 'Keine Zuordnungsregeln eingerichtet'
+              : 'Manuelle Gruppen · keine automatische Zuordnung'
           }}
         </div>
         <ol class="popup-rules">
@@ -60,23 +72,34 @@ async function openSettings() {
               :style="`--dot-color: var(--group-${rule.color})`"
             ></span>
             <div>
-              <strong>{{ rule.title }}</strong>
+              <strong>{{ rule.title || 'Ohne Namen' }}</strong>
               <p>
                 {{
-                  rule.matchers.includes('*')
-                    ? 'Übrige neue Tabs'
-                    : rule.matchers.join(' · ')
+                  !rule.matchers.length
+                    ? 'Ohne Zuordnungsregel'
+                    : rule.matchers.includes('*')
+                      ? 'Übrige neue Tabs'
+                      : rule.matchers.join(' · ')
                 }}
               </p>
+              <span v-if="rule.options.keepOpen" class="small muted">
+                Dauerhaft offen
+              </span>
               <span v-if="rule.options.excludedTitles?.length" class="small muted">
                 {{ rule.options.excludedTitles.length }} Titel-Ausnahme{{
                   rule.options.excludedTitles.length === 1 ? '' : 'n'
                 }}
               </span>
             </div>
-            <span class="small muted">
-              {{ rule.options.merge ? 'Fensterübergreifend' : 'Im Fenster bleiben' }}
-            </span>
+            <button
+              class="button secondary popup-open"
+              type="button"
+              :disabled="opening"
+              :aria-label="`${rule.title || 'Gruppe ohne Namen'} öffnen`"
+              @click="openGroup(rule.id)"
+            >
+              Öffnen
+            </button>
           </li>
         </ol>
         <p class="popup-note">

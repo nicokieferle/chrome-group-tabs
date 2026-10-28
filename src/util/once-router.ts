@@ -90,6 +90,7 @@ export function registerOnceRouter(
   let getGroups: () => GroupConfiguration[] = () => []
   let ready: Promise<void>
   let queue = Promise.resolve()
+  let groupQueue = Promise.resolve()
   let restoreUntil = 0
   let startupSeen = false
   let startupGeneration = 0
@@ -97,6 +98,15 @@ export function registerOnceRouter(
   // restored tabs. On a worker wake-up the tab that triggered onCreated can
   // already appear here, so the snapshot alone must not mark it as handled.
   const baseline = api.tabs.query({})
+
+  function withGroupLock<T>(task: () => Promise<T>): Promise<T> {
+    const result = groupQueue.then(task)
+    groupQueue = result.then(
+      () => {},
+      () => {},
+    )
+    return result
+  }
 
   function isProtectedTab(tabId: number, tab: chrome.tabs.Tab) {
     return (
@@ -133,22 +143,12 @@ export function registerOnceRouter(
     })
   }
 
-  async function assign(
-    tabId: number,
+  async function findTarget(
     rule: GroupConfiguration,
-    expected: chrome.tabs.Tab,
+    window: chrome.windows.Window,
+    nativeGroups?: chrome.tabGroups.TabGroup[],
   ) {
-    const generation = startupGeneration
-    let tab = await api.tabs.get(tabId)
-    if (
-      isProtectedTab(tabId, tab) ||
-      expected.groupId !== -1 ||
-      tab.windowId !== expected.windowId
-    )
-      return
-    const window = await api.windows.get(tab.windowId)
-    if (window.type !== 'normal') return
-    const groups = await api.tabGroups.query({})
+    const groups = nativeGroups ?? (await api.tabGroups.query({}))
     const bindingKey = `${TARGET_PREFIX}${rule.id}:${window.incognito ? 'private' : 'normal'}`
     const ruleTitle = rule.title.toLocaleLowerCase()
     const binding = bindings.get(bindingKey)
@@ -158,9 +158,26 @@ export function registerOnceRouter(
       binding?.ruleTitle === ruleTitle
         ? groups.find(group => group.id === binding.groupId)
         : undefined
+    const reserved = new Set(
+      [...bindings.entries()]
+        .filter(
+          ([key]) =>
+            key !== bindingKey &&
+            key.endsWith(window.incognito ? ':private' : ':normal') &&
+            getGroups().some(
+              rule =>
+                key ===
+                `${TARGET_PREFIX}${rule.id}:${window.incognito ? 'private' : 'normal'}`,
+            ),
+        )
+        .map(([, value]) => value.groupId),
+    )
     const matches = groups.filter(
       group =>
-        group.id !== bound?.id && group.title?.toLocaleLowerCase() === ruleTitle,
+        group.id !== bound?.id &&
+        (group.title ?? '').toLocaleLowerCase() === ruleTitle &&
+        (ruleTitle !== '' ||
+          (group.color === rule.color && !reserved.has(group.id))),
     )
     const candidates = [
       ...(bound ? [bound] : []),
@@ -182,10 +199,38 @@ export function registerOnceRouter(
         // A window may close after tabGroups.query; try the remaining groups.
       }
     }
+    return target
+  }
+
+  async function bindTarget(
+    rule: GroupConfiguration,
+    group: chrome.tabGroups.TabGroup,
+    incognito: boolean,
+  ) {
+    const key = `${TARGET_PREFIX}${rule.id}:${incognito ? 'private' : 'normal'}`
+    const binding = { groupId: group.id, ruleTitle: rule.title.toLocaleLowerCase() }
+    bindings.set(key, binding)
+    await api.storage.session.set({ [key]: binding })
+  }
+
+  async function assign(
+    tabId: number,
+    rule: GroupConfiguration,
+    expected: chrome.tabs.Tab,
+  ) {
+    const generation = startupGeneration
+    let tab = await api.tabs.get(tabId)
+    if (
+      isProtectedTab(tabId, tab) ||
+      expected.groupId !== -1 ||
+      tab.windowId !== expected.windowId
+    )
+      return
+    const window = await api.windows.get(tab.windowId)
+    if (window.type !== 'normal') return
+    const target = await findTarget(rule, window)
     if (target && generation === startupGeneration && Date.now() > restoreUntil) {
-      const nextBinding = { groupId: target.id, ruleTitle }
-      bindings.set(bindingKey, nextBinding)
-      await api.storage.session.set({ [bindingKey]: nextBinding })
+      await bindTarget(rule, target, window.incognito)
     }
     // Respect a manual move/pin while the asynchronous queries were running.
     const latest = await api.tabs.get(tabId)
@@ -223,9 +268,7 @@ export function registerOnceRouter(
         createProperties: { windowId: tab.windowId },
       })
       await api.tabGroups.update(id, { title: rule.title, color: rule.color })
-      const nextBinding = { groupId: id, ruleTitle }
-      bindings.set(bindingKey, nextBinding)
-      await api.storage.session.set({ [bindingKey]: nextBinding })
+      await bindTarget(rule, { id } as chrome.tabGroups.TabGroup, window.incognito)
     }
   }
 
@@ -247,7 +290,7 @@ export function registerOnceRouter(
     )
       return
     const rule = matchNewTab(tab, getGroups())
-    if (rule) await assign(tabId, rule, tab)
+    if (rule) await withGroupLock(() => assign(tabId, rule, tab))
   }
 
   async function schedule(tabId: number) {
@@ -303,7 +346,15 @@ export function registerOnceRouter(
         return
       }
       // Lazy session restoration can happen after the initial startup burst.
-      if (tab.groupId !== -1 || tab.discarded || tab.status === 'unloaded') {
+      const anchorBase = api.runtime.getURL?.('group-anchor.html')
+      const ownAnchor =
+        anchorBase && (tab.pendingUrl || tab.url || '').split('?')[0] === anchorBase
+      if (
+        ownAnchor ||
+        tab.groupId !== -1 ||
+        tab.discarded ||
+        tab.status === 'unloaded'
+      ) {
         await forget(tabId)
         return
       }
@@ -448,6 +499,10 @@ export function registerOnceRouter(
 
   return {
     ready,
+    findTarget,
+    bindTarget,
+    startupDelay: () => Math.max(0, restoreUntil - Date.now() + 1),
+    withGroupLock,
     // Disposal retains session records, just as service-worker sleep does.
     dispose() {
       for (const timer of timers.values()) clearTimeout(timer)
