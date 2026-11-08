@@ -167,16 +167,10 @@ const colorNames = {
           </p>
         </div>
         <div>
-          <label :for="`${rule.id}-windows`">Fensterzuordnung</label>
-          <select :id="`${rule.id}-windows`" v-model="rule.merge">
-            <option :value="false">Im Fenster bleiben (keine Gruppenkopie)</option>
-            <option :value="true">Bestehende Gruppe auch in anderen Fenstern</option>
-          </select>
+          <span class="field-label">Fensterzuordnung</span>
           <p class="field-help">
-            Jede Regel nutzt eine feste Zielgruppe. Liegt sie in einem anderen
-            Fenster, wechselt der Tab dorthin oder bleibt ohne neue Zuordnung in
-            seinem Fenster. Es entsteht keine Gruppenkopie. Bestehende Gruppen
-            behalten ihre Farbe.
+            Neue Tabs bleiben in ihrem Fenster. Ist die Zielgruppe anderswo offen,
+            bleibt der Tab hier ungruppiert.
           </p>
         </div>
       </div>

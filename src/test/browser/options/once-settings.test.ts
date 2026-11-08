@@ -80,9 +80,7 @@ test('validates new rules and retains a custom rule after saving and reloading',
   const last = page.locator('.rule-card').last()
   await last.getByLabel('Zielgruppe', { exact: true }).fill('GitHub')
   await last.getByLabel('URL-Muster', { exact: true }).fill('https://github.com/*')
-  await last
-    .getByLabel('Fensterzuordnung', { exact: true })
-    .selectOption({ label: 'Bestehende Gruppe auch in anderen Fenstern' })
+  await expect(last).toContainText('Neue Tabs bleiben in ihrem Fenster.')
   await page.getByRole('button', { name: 'Regel 3 nach oben' }).click()
   await page.getByRole('button', { name: 'Änderungen speichern' }).click()
   await expect(page.getByRole('status')).toContainText('Gespeichert')

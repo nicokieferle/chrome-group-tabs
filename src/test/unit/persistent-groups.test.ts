@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { registerOnceRouter } from '@/util/once-router'
-import { anchorRuleId, registerPersistentGroups } from '@/util/persistent-groups'
+import { anchorRuleId } from '@/util/group-anchor'
+import { registerPersistentGroups } from '@/util/persistent-groups'
 import { newManualGroup, toRules } from '@/util/once-settings'
 import type { GroupConfiguration } from '@/util/types'
 
@@ -100,6 +101,7 @@ function harness(config = toRules([newManualGroup()])) {
       update: vi.fn(async (id: number, info: any) =>
         Object.assign(groups.find(group => group.id === id)!, info),
       ),
+      onCreated: event(),
       onRemoved: event(),
     },
     windows: {
@@ -474,10 +476,225 @@ it('does not close a user page if anchor creation fails after the user navigated
     throw new Error('Group operation failed')
   })
   try {
-    await expect(manager.reconcile()).rejects.toThrow('Group operation failed')
+    await expect(manager.open(current.rules[0]!.id, 1)).rejects.toThrow(
+      'Group operation failed',
+    )
     expect(current.api.tabs.remove).not.toHaveBeenCalled()
     expect([...current.tabs.values()][0]!.url).toBe('https://chatgpt.com/c/keep-me')
   } finally {
     log.mockRestore()
   }
+})
+
+it('repairs an ungrouped, loaded start tab in its own window after restore', async () => {
+  current = harness()
+  const { manager, router } = current.start()
+  const rule = current.rules[0]!
+  const anchor = current.put(60, {
+    windowId: 2,
+    url: current.api.runtime.getURL(`group-anchor.html?group=${rule.id}`),
+    status: 'unloaded',
+    discarded: true,
+  })
+  await manager.reconcile()
+  expect(current.groups).toHaveLength(0)
+  current.update(anchor.id!, { discarded: false, status: 'complete' })
+  await vi.advanceTimersByTimeAsync(450)
+  await manager.idle()
+  await router.idle()
+  expect(current.groups).toHaveLength(1)
+  expect(current.tabs.get(60)).toMatchObject({
+    groupId: current.groups[0]!.id,
+    windowId: 2,
+  })
+  expect(current.api.tabs.create).not.toHaveBeenCalled()
+  expect(current.api.tabs.move).not.toHaveBeenCalled()
+})
+
+it('gives the restored marker priority over a stale binding and groups with identical names', async () => {
+  const draft = {
+    ...newManualGroup(),
+    title: 'Coding',
+    automatic: true,
+    patterns: 'https://chatgpt.com/*',
+  }
+  current = harness(toRules([draft]))
+  const rule = current.rules[0]!
+  current.stored[`group-once:target:${rule.id}:normal`] = {
+    groupId: 71,
+    ruleTitle: 'coding',
+  }
+  current.groups.push(
+    {
+      id: 71,
+      windowId: 1,
+      title: 'Coding',
+      color: 'blue',
+      collapsed: false,
+      shared: false,
+    },
+    {
+      id: 72,
+      windowId: 2,
+      title: 'Renamed',
+      color: 'blue',
+      collapsed: false,
+      shared: false,
+    },
+  )
+  current.put(61, { groupId: 71 })
+  current.put(62, {
+    groupId: 72,
+    windowId: 2,
+    url: current.api.runtime.getURL(`group-anchor.html?group=${rule.id}`),
+  })
+  const { manager, router } = current.start()
+  // Route before the persistent manager gets a chance to refresh the binding.
+  manager.dispose()
+  current.api.tabs.onCreated.emit(
+    current.put(63, { url: 'https://chatgpt.com/', windowId: 1 }),
+  )
+  current.api.tabs.onCreated.emit(
+    current.put(64, { url: 'https://chatgpt.com/', windowId: 2 }),
+  )
+  await router.idle()
+  await vi.advanceTimersByTimeAsync(800)
+  await router.idle()
+  expect(current.tabs.get(63)).toMatchObject({ groupId: -1, windowId: 1 })
+  expect(current.tabs.get(64)).toMatchObject({ groupId: 72, windowId: 2 })
+  expect(current.tabs.get(61)?.groupId).toBe(71)
+  expect(current.groups).toHaveLength(2)
+})
+
+it('does not adopt or duplicate an unmarked unnamed group based on color alone', async () => {
+  current = harness()
+  current.groups.push({
+    id: 71,
+    windowId: 1,
+    title: '',
+    color: 'blue',
+    collapsed: false,
+    shared: false,
+  })
+  current.put(61, { groupId: 71 })
+  const { manager } = current.start()
+  await manager.reconcile()
+  expect(current.groups).toHaveLength(1)
+  expect(current.tabs.get(61)?.groupId).toBe(71)
+  expect(current.api.tabs.create).not.toHaveBeenCalled()
+})
+
+it('does not let continuous events postpone reopening a persistent group', async () => {
+  current = harness()
+  const { manager, router } = current.start()
+  await router.ready
+  for (let i = 0; i < 5; i++) {
+    await vi.advanceTimersByTimeAsync(100)
+    current.api.tabs.onUpdated.emit(1, { url: `https://example.com/${i}` })
+  }
+  await manager.idle()
+  expect(current.groups).toHaveLength(1)
+  expect(current.api.tabs.create).toHaveBeenCalledTimes(1)
+})
+
+it('keeps restoring other groups when a single group creation fails', async () => {
+  current = harness(toRules([newManualGroup(), newManualGroup()]))
+  const { manager } = current.start()
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+  current.api.tabs.create.mockRejectedValueOnce(new Error('Window closed'))
+  try {
+    await manager.reconcile()
+    expect(current.groups).toHaveLength(1)
+    expect([...current.tabs.values()][0]!.url).toContain(current.rules[1]!.id)
+  } finally {
+    log.mockRestore()
+  }
+})
+
+it('opens a page in the start tab group without consuming its identity marker', async () => {
+  current = harness()
+  const { manager, router } = current.start()
+  await manager.reconcile()
+  const anchor = [...current.tabs.values()][0]!
+  await manager.openPage(anchor.id!, 'https://example.com/from-start-tab')
+  await router.idle()
+  const page = [...current.tabs.values()].find(
+    tab => tab.url === 'https://example.com/from-start-tab',
+  )
+  expect(page).toMatchObject({
+    groupId: anchor.groupId,
+    windowId: anchor.windowId,
+    active: true,
+  })
+  expect(current.tabs.get(anchor.id!)?.url).toBe(anchor.url)
+  expect(current.groups).toHaveLength(1)
+  expect(current.api.tabs.move).not.toHaveBeenCalled()
+})
+
+it('leaves already open copies untouched and does not create another group for the same marker', async () => {
+  current = harness()
+  const url = current.api.runtime.getURL(
+    `group-anchor.html?group=${current.rules[0]!.id}`,
+  )
+  for (const [id, windowId] of [
+    [71, 1],
+    [72, 2],
+  ] as const) {
+    current.groups.push({
+      id,
+      windowId,
+      title: '',
+      color: 'blue',
+      collapsed: false,
+      shared: false,
+    })
+    current.put(id, { url, groupId: id, windowId })
+    current.put(id + 100, { groupId: id, windowId })
+  }
+  const { manager } = current.start()
+  await manager.reconcile()
+  expect(current.groups).toHaveLength(2)
+  expect(current.tabs.get(171)?.groupId).toBe(71)
+  expect(current.tabs.get(172)?.groupId).toBe(72)
+  expect(current.api.tabs.create).not.toHaveBeenCalled()
+  expect(current.api.tabs.remove).not.toHaveBeenCalled()
+  expect(current.api.tabs.group).not.toHaveBeenCalled()
+})
+
+it('recreates a closed group in its original window after the worker restarts', async () => {
+  current = harness()
+  let { manager, router } = current.start()
+  await manager.open(current.rules[0]!.id, 2)
+  await router.idle()
+  const oldAnchor = [...current.tabs.values()][0]!
+  manager.dispose()
+  router.dispose()
+  await current.api.tabs.remove(oldAnchor.id!)
+  ;({ manager, router } = current.start())
+  await manager.reconcile()
+  expect(current.groups).toHaveLength(1)
+  expect(current.groups[0]!.windowId).toBe(2)
+  expect(current.tabs.size).toBe(1)
+  expect(current.api.tabs.move).not.toHaveBeenCalled()
+})
+
+it('recovers an unloaded orphan after the restore grace period without opening a second start tab', async () => {
+  current = harness()
+  const { manager, router } = current.start()
+  const rule = current.rules[0]!
+  current.put(60, {
+    url: current.api.runtime.getURL(`group-anchor.html?group=${rule.id}`),
+    groupId: -1,
+    status: 'unloaded',
+    discarded: true,
+  })
+  await manager.reconcile()
+  await vi.advanceTimersByTimeAsync(2_000)
+  expect(current.groups).toHaveLength(0)
+  await vi.advanceTimersByTimeAsync(2_500)
+  await manager.idle()
+  await router.idle()
+  expect(current.groups).toHaveLength(1)
+  expect(current.tabs.get(60)?.groupId).toBe(current.groups[0]!.id)
+  expect(current.api.tabs.create).not.toHaveBeenCalled()
 })

@@ -1,3 +1,4 @@
+import { anchorRuleId } from './group-anchor'
 import { generateMatcherRegex } from './matcher-regex'
 import type { GroupConfiguration } from './types'
 
@@ -10,7 +11,7 @@ type PendingTab = {
   initialGroupId: number
   awaitingNavigation?: boolean
 }
-type GroupBinding = { groupId: number; ruleTitle: string }
+type GroupBinding = { groupId: number; ruleTitle: string; windowId?: number }
 const PREFIX = 'group-once:pending:'
 const HANDLED_PREFIX = 'group-once:handled:'
 const TARGET_PREFIX = 'group-once:target:'
@@ -65,7 +66,7 @@ export function createDefaultGroups(nativeGroups: chrome.tabGroups.TabGroup[]) {
       color: existing?.color ?? (index === 0 ? 'green' : 'grey'),
       matchers:
         index === 0 ? ['https://chatgpt.com/*', 'https://chat.openai.com/*'] : ['*'],
-      options: { strict: false, merge: index === 0, excludedTitles: [] },
+      options: { strict: false, merge: false, excludedTitles: [] },
     }
   })
 }
@@ -146,69 +147,105 @@ export function registerOnceRouter(
   async function findTarget(
     rule: GroupConfiguration,
     window: chrome.windows.Window,
-    nativeGroups?: chrome.tabGroups.TabGroup[],
-  ) {
-    const groups = nativeGroups ?? (await api.tabGroups.query({}))
-    const bindingKey = `${TARGET_PREFIX}${rule.id}:${window.incognito ? 'private' : 'normal'}`
-    const ruleTitle = rule.title.toLocaleLowerCase()
-    const binding = bindings.get(bindingKey)
-    // A rule owns one destination per privacy context, independent of the
-    // source window. Native renames and moves must not switch that destination.
-    const bound =
-      binding?.ruleTitle === ruleTitle
-        ? groups.find(group => group.id === binding.groupId)
-        : undefined
-    const reserved = new Set(
-      [...bindings.entries()]
-        .filter(
-          ([key]) =>
-            key !== bindingKey &&
-            key.endsWith(window.incognito ? ':private' : ':normal') &&
-            getGroups().some(
-              rule =>
-                key ===
-                `${TARGET_PREFIX}${rule.id}:${window.incognito ? 'private' : 'normal'}`,
-            ),
-        )
-        .map(([, value]) => value.groupId),
-    )
-    const matches = groups.filter(
+    snapshot?: { groups: chrome.tabGroups.TabGroup[]; tabs: chrome.tabs.Tab[] },
+  ): Promise<{
+    group?: chrome.tabGroups.TabGroup
+    anchors: chrome.tabs.Tab[]
+    blocked?: 'restoring' | 'ambiguous'
+  }> {
+    const [groups, tabs] = snapshot
+      ? [snapshot.groups, snapshot.tabs]
+      : await Promise.all([api.tabGroups.query({}), api.tabs.query({})])
+    const scope = window.incognito ? ':private' : ':normal'
+    const key = `${TARGET_PREFIX}${rule.id}${scope}`
+    const title = rule.title.toLocaleLowerCase()
+    const binding = bindings.get(key)
+    const base = api.runtime.getURL?.('group-anchor.html')
+    const anchors: chrome.tabs.Tab[] = []
+    const owners = new Map<number, Set<string>>()
+    for (const tab of tabs) {
+      if (tab.incognito !== window.incognito) continue
+      const id = anchorRuleId(tab.pendingUrl || tab.url || '', base)
+      if (!id) continue
+      if (id === rule.id) anchors.push(tab)
+      if (tab.groupId === -1) continue
+      const claims = owners.get(tab.groupId) ?? new Set<string>()
+      claims.add(id)
+      owners.set(tab.groupId, claims)
+    }
+    const marked = groups.filter(
       group =>
-        group.id !== bound?.id &&
-        (group.title ?? '').toLocaleLowerCase() === ruleTitle &&
-        (ruleTitle !== '' ||
-          (group.color === rule.color && !reserved.has(group.id))),
+        owners.get(group.id)?.size === 1 &&
+        anchors.some(
+          tab => tab.groupId === group.id && tab.windowId === group.windowId,
+        ),
     )
-    const candidates = [
-      ...(bound ? [bound] : []),
-      ...matches.filter(group => group.color === rule.color),
-      ...matches.filter(group => group.color !== rule.color),
-    ]
-    let target: chrome.tabGroups.TabGroup | undefined
-    for (const group of candidates) {
+    async function inScope(group: chrome.tabGroups.TabGroup) {
       try {
-        const targetWindow = await api.windows.get(group.windowId)
-        if (
-          targetWindow.type === 'normal' &&
-          targetWindow.incognito === window.incognito
-        ) {
-          target = group
-          break
-        }
+        const candidate =
+          group.windowId === window.id
+            ? window
+            : await api.windows.get(group.windowId)
+        return (
+          candidate.type === 'normal' && candidate.incognito === window.incognito
+        )
       } catch {
-        // A window may close after tabGroups.query; try the remaining groups.
+        return false
       }
     }
-    return target
+    // A restored anchor outranks transient numeric IDs, titles and colors.
+    for (const group of marked.sort((a, b) => a.id - b.id)) {
+      if (group.id === binding?.groupId && (await inScope(group)))
+        return { group, anchors }
+    }
+    for (const group of marked) {
+      if (await inScope(group)) return { group, anchors }
+    }
+    // Chrome can report the tab before its group is queryable.
+    if (anchors.some(tab => tab.groupId !== -1))
+      return { anchors, blocked: 'restoring' }
+    const bound =
+      binding?.ruleTitle === title
+        ? groups.find(group => group.id === binding.groupId && !owners.has(group.id))
+        : undefined
+    if (bound && (await inScope(bound))) return { group: bound, anchors }
+
+    const reserved = new Set(
+      getGroups()
+        .filter(other => other.id !== rule.id)
+        .map(other => bindings.get(`${TARGET_PREFIX}${other.id}${scope}`)?.groupId),
+    )
+    const matches = []
+    for (const group of groups) {
+      if (owners.has(group.id) || reserved.has(group.id)) continue
+      if ((group.title ?? '').toLocaleLowerCase() !== title) continue
+      if (!title && group.color !== rule.color) continue
+      if (await inScope(group)) matches.push(group)
+    }
+    // An unmarked color or duplicated title is not an ownership signal.
+    if (matches.length > 1 || (!title && matches.length))
+      return { anchors, blocked: 'ambiguous' }
+    return { group: matches[0], anchors }
   }
 
   async function bindTarget(
     rule: GroupConfiguration,
-    group: chrome.tabGroups.TabGroup,
+    group: Pick<chrome.tabGroups.TabGroup, 'id' | 'windowId'>,
     incognito: boolean,
   ) {
     const key = `${TARGET_PREFIX}${rule.id}:${incognito ? 'private' : 'normal'}`
-    const binding = { groupId: group.id, ruleTitle: rule.title.toLocaleLowerCase() }
+    const binding = {
+      groupId: group.id,
+      ruleTitle: rule.title.toLocaleLowerCase(),
+      windowId: group.windowId,
+    }
+    const previous = bindings.get(key)
+    if (
+      previous?.groupId === binding.groupId &&
+      previous.ruleTitle === binding.ruleTitle &&
+      previous.windowId === binding.windowId
+    )
+      return
     bindings.set(key, binding)
     await api.storage.session.set({ [key]: binding })
   }
@@ -219,7 +256,7 @@ export function registerOnceRouter(
     expected: chrome.tabs.Tab,
   ) {
     const generation = startupGeneration
-    let tab = await api.tabs.get(tabId)
+    const tab = await api.tabs.get(tabId)
     if (
       isProtectedTab(tabId, tab) ||
       expected.groupId !== -1 ||
@@ -228,7 +265,8 @@ export function registerOnceRouter(
       return
     const window = await api.windows.get(tab.windowId)
     if (window.type !== 'normal') return
-    const target = await findTarget(rule, window)
+    const { group: target, anchors, blocked } = await findTarget(rule, window)
+    if (blocked || (!target && anchors.length)) return
     if (target && generation === startupGeneration && Date.now() > restoreUntil) {
       await bindTarget(rule, target, window.incognito)
     }
@@ -241,34 +279,16 @@ export function registerOnceRouter(
       latest.windowId !== tab.windowId
     )
       return
-    tab = latest
     if (target) {
-      if (tab.groupId === target.id) return
-      if (target.windowId !== tab.windowId) {
-        // Staying in the source window must not create a second destination.
-        if (!rule.options.merge) return
-        await api.tabs.move(tabId, { windowId: target.windowId, index: -1 })
-        const moved = await api.tabs.get(tabId)
-        if (
-          isProtectedTab(tabId, moved) ||
-          moved.windowId !== target.windowId ||
-          generation !== startupGeneration ||
-          Date.now() <= restoreUntil
-        )
-          return
-      }
+      if (target.windowId !== latest.windowId) return
       await api.tabs.group({ tabIds: [tabId], groupId: target.id })
-      if (tab.active && target.windowId !== tab.windowId) {
-        await api.tabs.update(tabId, { active: true })
-        await api.windows.update(target.windowId, { focused: true })
-      }
     } else {
       const id = await api.tabs.group({
         tabIds: [tabId],
         createProperties: { windowId: tab.windowId },
       })
       await api.tabGroups.update(id, { title: rule.title, color: rule.color })
-      await bindTarget(rule, { id } as chrome.tabGroups.TabGroup, window.incognito)
+      await bindTarget(rule, { id, windowId: tab.windowId }, window.incognito)
     }
   }
 
@@ -501,6 +521,9 @@ export function registerOnceRouter(
     ready,
     findTarget,
     bindTarget,
+    boundWindow: (id: string, incognito: boolean) =>
+      bindings.get(`${TARGET_PREFIX}${id}:${incognito ? 'private' : 'normal'}`)
+        ?.windowId,
     startupDelay: () => Math.max(0, restoreUntil - Date.now() + 1),
     withGroupLock,
     // Disposal retains session records, just as service-worker sleep does.

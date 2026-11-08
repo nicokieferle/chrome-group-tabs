@@ -27,7 +27,7 @@ async function refreshGroup() {
     /* A group can close while its start page is loading. */
   }
 }
-document.querySelector('#open-page').addEventListener('submit', event => {
+document.querySelector('#open-page').addEventListener('submit', async event => {
   event.preventDefault()
   const text = document.querySelector('#address').value.trim()
   if (!text) return
@@ -35,7 +35,27 @@ document.querySelector('#open-page').addEventListener('submit', event => {
   if (/^https?:\/\//i.test(text)) target = text
   else if (/^[\w.-]+\.[a-z]{2,}(?:[/:?#]|$)/i.test(text)) target = `https://${text}`
   else target = `https://www.google.com/search?q=${encodeURIComponent(text)}`
-  location.assign(target)
+  if (!globalThis.chrome?.runtime?.sendMessage) {
+    location.assign(target)
+    return
+  }
+  const button = event.currentTarget.querySelector('button')
+  const feedback = document.querySelector('#open-error')
+  feedback.hidden = true
+  button.disabled = true
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'once:open-page',
+      url: target,
+    })
+    if (!result?.ok) throw new Error(result?.error || 'Öffnen fehlgeschlagen.')
+    document.querySelector('#address').value = ''
+  } catch (error) {
+    feedback.textContent = error.message
+    feedback.hidden = false
+  } finally {
+    button.disabled = false
+  }
 })
 document
   .querySelector('#settings')

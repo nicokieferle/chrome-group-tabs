@@ -267,11 +267,8 @@ function restoreDefaults() {
                       {{ preview.rule.title || 'Ohne Namen' }}
                     </strong>
                     <span class="muted">
-                      {{
-                        preview.rule.options.merge
-                          ? 'Bestehende Gruppe auch in anderen Fenstern verwenden.'
-                          : 'Liegt die Zielgruppe in einem anderen Fenster, bleibt der Tab hier ohne neue Zuordnung.'
-                      }}
+                      Ist die Zielgruppe in einem anderen Fenster offen, bleibt der
+                      Tab hier ungruppiert.
                     </span>
                   </template>
                   <template v-else>
