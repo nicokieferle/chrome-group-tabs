@@ -10,7 +10,6 @@ export type RuleDraft = {
   color: GroupConfiguration['color']
   patterns: string
   excludedTitles: string
-  merge: boolean
   automatic: boolean
   keepOpen: boolean
 }
@@ -50,7 +49,6 @@ export function toDrafts(rules: GroupConfiguration[]): RuleDraft[] {
     color: rule.color,
     patterns: rule.matchers.join('\n'),
     excludedTitles: (rule.options.excludedTitles ?? []).join('\n'),
-    merge: rule.options.merge,
     automatic: rule.matchers.length > 0,
     keepOpen: Boolean(rule.options.keepOpen),
   }))
@@ -77,7 +75,7 @@ export function toRules(drafts: RuleDraft[]): GroupConfiguration[] {
       // Strict regrouping is not part of the Once router.
       options: {
         strict: false,
-        merge: draft.merge,
+        merge: false,
         excludedTitles: lines(draft.excludedTitles),
         keepOpen: draft.keepOpen,
       },
@@ -93,7 +91,6 @@ export function newRule(): RuleDraft {
     color: 'blue',
     patterns: '',
     excludedTitles: '',
-    merge: false,
     automatic: true,
     keepOpen: false,
   }

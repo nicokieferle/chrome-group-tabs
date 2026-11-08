@@ -185,7 +185,7 @@ it('seeds GPT and catch-all Default with existing native names/colors and valid 
   expect(defaults[0]).toMatchObject({
     title: 'GPT',
     color: 'cyan',
-    options: { merge: true },
+    options: { merge: false },
   })
   expect(defaults[1]).toMatchObject({ title: 'Default', matchers: ['*'] })
   expect(GroupConfigurationSchemas.safeParse(defaults).success).toBe(true)
@@ -444,7 +444,7 @@ it('keeps pinned tabs, split views, popup windows and unmatched rules untouched'
   expect(current.api.tabs.group).not.toHaveBeenCalled()
 })
 
-it('reuses GPT across windows while keeping local tabs and incognito separate', async () => {
+it('keeps a legacy merge-enabled tab in its window and separates private groups', async () => {
   current = harness([
     {
       id: 7,
@@ -455,6 +455,7 @@ it('reuses GPT across windows while keeping local tabs and incognito separate', 
       shared: false,
     },
   ])
+  current.rules[0]!.options.merge = true
   const router = current.start()
   await router.ready
   current.create(1, { url: 'https://chatgpt.com/', active: true })
@@ -465,8 +466,9 @@ it('reuses GPT across windows while keeping local tabs and incognito separate', 
   })
   current.create(3, { url: 'https://example.com/' })
   await settle(router)
-  expect(current.tabs.get(1)).toMatchObject({ groupId: 7, windowId: 2 })
-  expect(current.api.windows.update).toHaveBeenCalledWith(2, { focused: true })
+  expect(current.tabs.get(1)).toMatchObject({ groupId: -1, windowId: 1 })
+  expect(current.api.windows.update).not.toHaveBeenCalled()
+  expect(current.api.tabs.move).not.toHaveBeenCalled()
   expect(current.tabs.get(2)?.groupId).not.toBe(7)
   expect(
     current.groups.find(group => group.title === 'Default')?.windowId,
@@ -494,7 +496,7 @@ it('keeps restored tabs in their native groups after a full browser restart with
   expect(current.api.tabs.move).not.toHaveBeenCalled()
   expect(current.groups).toHaveLength(2)
   // Newly opened tabs are still routed once after startup settles.
-  current.create(104, { url: 'https://chatgpt.com/c/new' })
+  current.create(104, { url: 'https://chatgpt.com/c/new', windowId: 2 })
   current.create(105, { url: 'https://example.com/new' })
   await settle(router)
   expect(current.tabs.get(104)).toMatchObject({ groupId: 208, windowId: 2 })
@@ -662,11 +664,11 @@ it('keeps blank windows ungrouped across worker sleep and starts the load timeou
   expect(current.api.tabs.group).not.toHaveBeenCalled()
   current.update(91, { url: 'https://chatgpt.com/c/first', pendingUrl: undefined, status: 'complete' })
   await settle(router)
-  expect(current.tabs.get(91)).toMatchObject({ groupId: 7, windowId: 1 })
+  expect(current.tabs.get(91)).toMatchObject({ groupId: -1, windowId: 2 })
   current.update(91, { url: 'https://example.com/' })
   await settle(router)
-  expect(current.tabs.get(91)?.groupId).toBe(7)
-  expect(current.api.tabs.group).toHaveBeenCalledTimes(1)
+  expect(current.tabs.get(91)?.groupId).toBe(-1)
+  expect(current.api.tabs.group).not.toHaveBeenCalled()
 })
 
 it('does not create another Default in extra windows when moving between windows is disabled', async () => {
@@ -700,11 +702,11 @@ it('keeps a rule bound to the same native group after rename, color change and w
   await router.ready
   current.create(94, { windowId: 2, url: 'https://chatgpt.com/c/next' })
   await settle(router)
-  expect(current.tabs.get(94)).toMatchObject({ groupId: 7, windowId: 1 })
+  expect(current.tabs.get(94)).toMatchObject({ groupId: -1, windowId: 2 })
   expect(current.groups).toHaveLength(2)
   expect(current.groups[0]).toMatchObject({ title: 'Meine Gespräche', color: 'purple' })
   current.groups[0]!.windowId = 2
-  current.create(100, { url: 'https://chatgpt.com/c/after-group-move' })
+  current.create(100, { url: 'https://chatgpt.com/c/after-group-move', windowId: 2 })
   await settle(router)
   expect(current.tabs.get(100)).toMatchObject({ groupId: 7, windowId: 2 })
   expect(current.groups).toHaveLength(2)
@@ -719,8 +721,8 @@ it('reuses one destination for simultaneous tabs in different windows', async ()
   current.create(96, { windowId: 2, url: 'https://example.org/' })
   await settle(router)
   expect(current.groups).toHaveLength(1)
-  expect(current.tabs.get(95)?.groupId).toBe(current.tabs.get(96)?.groupId)
-  expect(current.tabs.get(96)?.windowId).toBe(1)
+  expect(current.tabs.get(95)?.groupId).toBe(current.groups[0]!.id)
+  expect(current.tabs.get(96)).toMatchObject({ groupId: -1, windowId: 2 })
 })
 
 it('rebinds a removed destination and releases the binding when the configured group name changes', async () => {
@@ -788,7 +790,7 @@ it('invalidates bindings when browser startup begins and keeps restored groups u
   current.groups.push({ id: 9, windowId: 2, title: 'GPT', color: 'green', collapsed: false, shared: false })
   current.api.runtime.onStartup.emit()
   await settle(router, 4_000)
-  current.create(123, { url: 'https://chatgpt.com/' })
+  current.create(123, { url: 'https://chatgpt.com/', windowId: 2 })
   await settle(router)
   expect(current.tabs.get(122)?.groupId).toBe(7)
   expect(current.tabs.get(123)).toMatchObject({ groupId: 9, windowId: 2 })
@@ -804,7 +806,7 @@ it('does not reuse stored group IDs on a cold start even when an ID now belongs 
   const router = current.start()
   await router.ready
   await settle(router, 4_000)
-  current.create(124, { url: 'https://chatgpt.com/' })
+  current.create(124, { url: 'https://chatgpt.com/', windowId: 2 })
   await settle(router)
   expect(current.tabs.get(124)).toMatchObject({ groupId: 9, windowId: 2 })
   expect(current.groups).toHaveLength(2)
@@ -884,23 +886,4 @@ it('does not regroup a tab assigned and then ungrouped while destination queries
   await settle(router)
   expect(current.tabs.get(133)?.groupId).toBe(-1)
   expect(current.api.tabs.group).not.toHaveBeenCalled()
-})
-
-it('retains a group attached while moving an ungrouped tab to another window', async () => {
-  current = harness([
-    { id: 7, windowId: 2, title: 'GPT', color: 'green', collapsed: false, shared: false },
-    { id: 8, windowId: 2, title: 'Coding', color: 'blue', collapsed: false, shared: false },
-  ])
-  const router = current.start()
-  await router.ready
-  const move = current.api.tabs.move.getMockImplementation()!
-  current.api.tabs.move.mockImplementation(async (id, info) => {
-    await move(id, info)
-    current!.update(id, { groupId: 8 })
-  })
-  current.create(134, { url: 'https://chatgpt.com/' })
-  await settle(router)
-  expect(current.tabs.get(134)).toMatchObject({ groupId: 8, windowId: 2 })
-  expect(current.api.tabs.group).not.toHaveBeenCalled()
-  expect(current.api.windows.update).not.toHaveBeenCalled()
 })

@@ -18,6 +18,7 @@ it('reads existing compressed, serialized and uncompressed configurations withou
   rules[0]!.color = 'purple'
   rules[0]!.options.excludedTitles = ['AC', 'Privat']
   rules[0]!.options.strict = true
+  rules[0]!.options.merge = true
   for (const raw of [rules, JSON.stringify(rules), encodeRules(rules, true)]) {
     expect(decodeRules(raw)).toEqual(rules)
   }
@@ -26,7 +27,7 @@ it('reads existing compressed, serialized and uncompressed configurations withou
     id: rules[0]!.id,
     title: 'Meine GPT-Gruppe',
     color: 'purple',
-    options: { strict: false, merge: true, excludedTitles: ['AC', 'Privat'] },
+    options: { strict: false, merge: false, excludedTitles: ['AC', 'Privat'] },
   })
 })
 

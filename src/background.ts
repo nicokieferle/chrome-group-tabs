@@ -26,6 +26,23 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 chrome.runtime.onUpdateAvailable.addListener(() => chrome.runtime.reload())
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === 'once:open-page') {
+    if (
+      sender.id !== chrome.runtime.id ||
+      sender.tab?.id === undefined ||
+      typeof message.url !== 'string'
+    )
+      return false
+    void persistent.openPage(sender.tab.id, message.url).then(
+      () => sendResponse({ ok: true }),
+      error =>
+        sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Öffnen fehlgeschlagen.',
+        }),
+    )
+    return true
+  }
   if (message?.type === 'once:open-group') {
     if (
       sender.id !== chrome.runtime.id ||
