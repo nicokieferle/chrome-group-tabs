@@ -124,9 +124,9 @@ const colorNames = {
           Dauerhaft offen halten
         </label>
         <p class="field-help">
-          Dauerhaft offene Gruppen behalten einen Start-Tab. Weitere Fenster öffnen
-          keine Kopie. Ausschalten beendet das Offenhalten, ohne deine Tabs zu
-          schließen.
+          Der Platzhalter erscheint nur, wenn die Gruppe sonst leer wäre. Sobald
+          normale Tabs vorhanden sind, verschwindet er. Ausschalten beendet das
+          Offenhalten, ohne deine normalen Tabs zu schließen.
         </p>
       </div>
       <div v-if="rule.automatic" class="rule-field">

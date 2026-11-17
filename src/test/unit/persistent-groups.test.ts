@@ -28,6 +28,7 @@ function harness(config = toRules([newManualGroup()])) {
   const stored: Record<string, unknown> = {
     'group-once:session': { restoreUntil: 0 },
   }
+  const localStored: Record<string, unknown> = {}
   let nextTab = 10,
     nextGroup = 100
   const api = {
@@ -103,6 +104,7 @@ function harness(config = toRules([newManualGroup()])) {
       ),
       onCreated: event(),
       onRemoved: event(),
+      onUpdated: event(),
     },
     windows: {
       get: vi.fn(async (id: number) => {
@@ -116,6 +118,12 @@ function harness(config = toRules([newManualGroup()])) {
       onRemoved: event(),
     },
     storage: {
+      local: {
+        get: vi.fn(async () => structuredClone(localStored)),
+        set: vi.fn(async (data: any) => {
+          Object.assign(localStored, structuredClone(data))
+        }),
+      },
       session: {
         get: vi.fn(async () => ({ ...stored })),
         set: vi.fn(async (data: any) => {
@@ -168,6 +176,7 @@ function harness(config = toRules([newManualGroup()])) {
     groups,
     windows,
     stored,
+    localStored,
     put,
     update,
     start,
@@ -207,7 +216,7 @@ it('creates one unnamed manual group and reuses it across extra windows and repe
   )
 })
 
-it('replaces a closed anchor and retains existing user tabs and the native group ID', async () => {
+it('does not replace a closed placeholder while user tabs keep the group open', async () => {
   current = harness()
   const { manager, router } = current.start()
   await manager.reconcile()
@@ -225,7 +234,7 @@ it('replaces a closed anchor and retains existing user tabs and the native group
     groupId,
     url: 'https://chatgpt.com/c/coding',
   })
-  expect(current.api.tabs.create).toHaveBeenCalledTimes(2)
+  expect(current.api.tabs.create).toHaveBeenCalledTimes(1)
 })
 
 it('restores distinct unnamed groups by their own anchor IDs after cold startup changes numeric IDs', async () => {
@@ -611,7 +620,7 @@ it('keeps restoring other groups when a single group creation fails', async () =
   }
 })
 
-it('opens a page in the start tab group without consuming its identity marker', async () => {
+it('opens a page in the group and then removes the redundant placeholder', async () => {
   current = harness()
   const { manager, router } = current.start()
   await manager.reconcile()
@@ -628,6 +637,10 @@ it('opens a page in the start tab group without consuming its identity marker', 
   })
   expect(current.tabs.get(anchor.id!)?.url).toBe(anchor.url)
   expect(current.groups).toHaveLength(1)
+  await vi.advanceTimersByTimeAsync(500)
+  await manager.idle()
+  expect(current.tabs.has(anchor.id!)).toBe(false)
+  expect(current.tabs.size).toBe(1)
   expect(current.api.tabs.move).not.toHaveBeenCalled()
 })
 
@@ -657,7 +670,9 @@ it('leaves already open copies untouched and does not create another group for t
   expect(current.tabs.get(171)?.groupId).toBe(71)
   expect(current.tabs.get(172)?.groupId).toBe(72)
   expect(current.api.tabs.create).not.toHaveBeenCalled()
-  expect(current.api.tabs.remove).not.toHaveBeenCalled()
+  expect(current.api.tabs.remove).toHaveBeenCalledWith(71)
+  expect(current.tabs.has(171)).toBe(true)
+  expect(current.tabs.has(172)).toBe(true)
   expect(current.api.tabs.group).not.toHaveBeenCalled()
 })
 
@@ -697,4 +712,248 @@ it('recovers an unloaded orphan after the restore grace period without opening a
   expect(current.groups).toHaveLength(1)
   expect(current.tabs.get(60)?.groupId).toBe(current.groups[0]!.id)
   expect(current.api.tabs.create).not.toHaveBeenCalled()
+})
+
+it('uses a placeholder only while its group has no normal tabs', async () => {
+  current = harness()
+  const { manager, router } = current.start()
+  await manager.reconcile()
+  await router.idle()
+  const placeholder = [...current.tabs.values()][0]!
+  const groupId = placeholder.groupId
+  current.put(80, { url: 'https://chatgpt.com/c/coding', groupId })
+  current.api.tabs.onUpdated.emit(80, { groupId })
+  await vi.advanceTimersByTimeAsync(500)
+  await manager.idle()
+  expect(current.tabs.has(placeholder.id!)).toBe(false)
+  expect(current.tabs.get(80)?.groupId).toBe(groupId)
+  expect(current.groups).toHaveLength(1)
+  expect(current.api.tabs.create).toHaveBeenCalledTimes(1)
+  await current.api.tabs.remove(80)
+  await vi.advanceTimersByTimeAsync(500)
+  await manager.idle()
+  expect(current.groups).toHaveLength(1)
+  expect(current.tabs.size).toBe(1)
+  expect([...current.tabs.values()][0]!.url).toContain('group-anchor.html?group=')
+  expect(current.api.tabs.create).toHaveBeenCalledTimes(2)
+})
+
+it('opens an existing populated group without adding a placeholder', async () => {
+  const draft = { ...newManualGroup(), title: 'Coding' }
+  current = harness(toRules([draft]))
+  current.groups.push({
+    id: 71,
+    windowId: 2,
+    title: 'Coding',
+    color: 'blue',
+    collapsed: true,
+    shared: false,
+  })
+  current.put(80, { groupId: 71, windowId: 2 })
+  const { manager } = current.start()
+  await manager.reconcile()
+  expect(current.api.windows.update).not.toHaveBeenCalled()
+  await manager.open(draft.id, 1)
+  expect(current.api.tabs.create).not.toHaveBeenCalled()
+  expect(current.tabs.size).toBe(1)
+  expect(current.api.tabs.update).toHaveBeenCalledWith(80, { active: true })
+  expect(current.api.windows.update).toHaveBeenCalledWith(2, { focused: true })
+})
+
+it('recognizes populated unnamed groups after cold startup without keeping visible identity tabs', async () => {
+  const drafts = [newManualGroup(), newManualGroup()]
+  current = harness(toRules(drafts))
+  let { manager, router } = current.start()
+  await manager.reconcile()
+  await router.idle()
+  const first = current.groups[0]!.id,
+    second = current.groups[1]!.id
+  current.put(80, { groupId: first, url: 'https://chatgpt.com/c/coding' })
+  current.put(81, { groupId: second, url: 'https://chatgpt.com/c/writing' })
+  await manager.reconcile()
+  expect(current.tabs.size).toBe(2)
+  expect(JSON.stringify(current.localStored)).not.toContain('https://')
+  manager.dispose()
+  router.dispose()
+  for (const group of current.groups) {
+    const oldId = group.id
+    group.id += 200
+    for (const tab of current.tabs.values())
+      if (tab.groupId === oldId) tab.groupId = group.id
+  }
+  for (const key of Object.keys(current.stored)) delete current.stored[key]
+  ;({ manager, router } = current.start())
+  await router.ready
+  await vi.advanceTimersByTimeAsync(4_000)
+  await manager.idle()
+  await manager.reconcile()
+  expect(current.tabs.size).toBe(2)
+  expect(current.groups).toHaveLength(2)
+  expect(current.api.tabs.create).toHaveBeenCalledTimes(2)
+  expect(current.stored[`group-once:target:${drafts[0]!.id}:normal`]).toMatchObject({
+    groupId: first + 200,
+  })
+  expect(current.stored[`group-once:target:${drafts[1]!.id}:normal`]).toMatchObject({
+    groupId: second + 200,
+  })
+})
+
+it('does not remove the placeholder if the last normal tab closes during the lookup', async () => {
+  current = harness()
+  const { manager } = current.start()
+  await manager.reconcile()
+  const placeholder = [...current.tabs.values()][0]!
+  current.put(80, { groupId: placeholder.groupId })
+  const get = current.api.tabs.get.getMockImplementation()!
+  current.api.tabs.get.mockImplementationOnce(async id => {
+    await current!.api.tabs.remove(80)
+    return get(id)
+  })
+  await manager.reconcile()
+  await vi.advanceTimersByTimeAsync(500)
+  await manager.idle()
+  expect(current.tabs.has(placeholder.id!)).toBe(true)
+  expect(current.tabs.size).toBe(1)
+  expect(current.api.tabs.remove).not.toHaveBeenCalledWith(placeholder.id!)
+  expect(current.api.tabs.create).toHaveBeenCalledTimes(1)
+})
+
+it('never deletes a placeholder that the user has navigated to a normal page', async () => {
+  current = harness()
+  const { manager } = current.start()
+  await manager.reconcile()
+  const placeholder = [...current.tabs.values()][0]!
+  current.put(80, { groupId: placeholder.groupId })
+  const get = current.api.tabs.get.getMockImplementation()!
+  current.api.tabs.get.mockImplementationOnce(async id => {
+    current!.update(id, { url: 'https://example.com/keep-this' })
+    return get(id)
+  })
+  await manager.reconcile()
+  await vi.advanceTimersByTimeAsync(500)
+  await manager.idle()
+  expect(current.tabs.get(placeholder.id!)?.url).toBe(
+    'https://example.com/keep-this',
+  )
+  expect(current.tabs.size).toBe(2)
+  expect(current.api.tabs.remove).not.toHaveBeenCalled()
+})
+
+it('updates a populated group moved to another window without creating another placeholder', async () => {
+  current = harness()
+  const { manager } = current.start()
+  await manager.reconcile()
+  const group = current.groups[0]!
+  current.put(80, { groupId: group.id, url: 'https://example.com/unique-project' })
+  await manager.reconcile()
+  group.id = 500
+  group.windowId = 2
+  current.update(80, { groupId: 500, windowId: 2 })
+  current.api.tabs.onAttached.emit(80)
+  await vi.advanceTimersByTimeAsync(500)
+  await manager.idle()
+  expect(current.groups).toHaveLength(1)
+  expect(current.tabs.size).toBe(1)
+  expect(current.api.tabs.create).toHaveBeenCalledTimes(1)
+  await current.api.tabs.remove(80)
+  await vi.advanceTimersByTimeAsync(500)
+  await manager.idle()
+  expect(current.groups).toHaveLength(1)
+  expect(current.groups[0]!.windowId).toBe(2)
+  expect(current.tabs.size).toBe(1)
+})
+
+it('does not persist member fingerprints for private groups', async () => {
+  const draft = { ...newManualGroup(), keepOpen: false }
+  current = harness(toRules([draft]))
+  const { manager } = current.start()
+  await manager.open(draft.id, 3)
+  const anchor = [...current.tabs.values()][0]!
+  current.setRules(
+    current.rules.map(rule => ({
+      ...rule,
+      options: { ...rule.options, keepOpen: true },
+    })),
+  )
+  current.put(80, {
+    groupId: anchor.groupId,
+    windowId: 3,
+    incognito: true,
+    url: 'https://example.com/private',
+  })
+  await manager.open(draft.id, 3)
+  expect(current.tabs.has(anchor.id!)).toBe(false)
+  expect(current.api.storage.local.set).not.toHaveBeenCalled()
+})
+
+it('forgets local fingerprints when keeping the group open is disabled', async () => {
+  const draft = { ...newManualGroup(), title: 'Coding' }
+  current = harness(toRules([draft]))
+  current.groups.push({
+    id: 71,
+    windowId: 1,
+    title: 'Coding',
+    color: 'blue',
+    collapsed: false,
+    shared: false,
+  })
+  current.put(80, { groupId: 71, url: 'https://example.com/coding' })
+  const { manager } = current.start()
+  await manager.reconcile()
+  expect(JSON.stringify(current.localStored)).toContain(draft.id)
+  current.setRules(
+    current.rules.map(rule => ({
+      ...rule,
+      options: { ...rule.options, keepOpen: false },
+    })),
+  )
+  await manager.reconcile()
+  expect(current.localStored['group-once:member-fingerprints']).toEqual({})
+  expect(current.tabs.has(80)).toBe(true)
+})
+
+it('does not create duplicates when populated unnamed groups have identical restored members', async () => {
+  current = harness(toRules([newManualGroup(), newManualGroup()]))
+  let { manager, router } = current.start()
+  await manager.reconcile()
+  for (const [index, group] of current.groups.entries())
+    current.put(80 + index, { groupId: group.id, url: 'https://example.com/shared' })
+  await manager.reconcile()
+  expect(current.tabs.size).toBe(2)
+  manager.dispose()
+  router.dispose()
+  for (const group of current.groups) {
+    const oldId = group.id
+    group.id += 200
+    for (const tab of current.tabs.values())
+      if (tab.groupId === oldId) tab.groupId = group.id
+  }
+  for (const key of Object.keys(current.stored)) delete current.stored[key]
+  ;({ manager, router } = current.start())
+  await router.ready
+  await vi.advanceTimersByTimeAsync(4_000)
+  await manager.idle()
+  await manager.reconcile()
+  expect(current.tabs.size).toBe(2)
+  expect(current.groups).toHaveLength(2)
+  expect(current.api.tabs.create).toHaveBeenCalledTimes(2)
+  expect(current.api.tabs.move).not.toHaveBeenCalled()
+})
+
+it('preserves the native name and color when replacing the last normal tab with a placeholder', async () => {
+  current = harness()
+  const { manager } = current.start()
+  await manager.reconcile()
+  const group = current.groups[0]!
+  current.put(80, { groupId: group.id, url: 'https://example.com/work' })
+  await manager.reconcile()
+  group.title = 'Mein Coding'
+  group.color = 'purple'
+  await manager.reconcile()
+  await current.api.tabs.remove(80)
+  await vi.advanceTimersByTimeAsync(500)
+  await manager.idle()
+  expect(current.groups).toHaveLength(1)
+  expect(current.groups[0]).toMatchObject({ title: 'Mein Coding', color: 'purple' })
+  expect(current.tabs.size).toBe(1)
 })

@@ -11,6 +11,9 @@ type Router = Pick<
   | 'boundWindow'
   | 'startupDelay'
   | 'withGroupLock'
+  | 'rememberMembers'
+  | 'pruneMemory'
+  | 'placeholderAppearance'
 >
 
 export function registerPersistentGroups(
@@ -27,6 +30,66 @@ export function registerPersistentGroups(
   let retryAt = 0
   let reconciling = false
   let requested = false
+  let membershipVersion = 0
+
+  function changed() {
+    membershipVersion++
+    schedule()
+  }
+
+  async function focusGroup(group: chrome.tabGroups.TabGroup) {
+    const members = (await api.tabs.query({})).filter(
+      tab => tab.groupId === group.id && tab.windowId === group.windowId,
+    )
+    const destination =
+      members.find(tab => !anchorRuleId(tab.pendingUrl || tab.url || '', base)) ??
+      members[0]
+    if (destination?.id === undefined) return
+    await api.tabGroups.update(group.id, { collapsed: false })
+    await api.tabs.update(destination.id, { active: true })
+    await api.windows.update(group.windowId, { focused: true })
+  }
+
+  async function removeRedundantPlaceholders(
+    rule: GroupConfiguration,
+    group: chrome.tabGroups.TabGroup,
+    anchors: chrome.tabs.Tab[],
+  ) {
+    for (const candidate of anchors) {
+      if (
+        candidate.id === undefined ||
+        candidate.groupId !== group.id ||
+        candidate.windowId !== group.windowId
+      )
+        continue
+      const version = membershipVersion
+      const [live, current] = await Promise.all([
+        api.tabs.query({}),
+        api.tabs.get(candidate.id).catch(() => undefined),
+      ])
+      if (version !== membershipVersion) {
+        schedule()
+        continue
+      }
+      if (
+        !current ||
+        current.groupId !== group.id ||
+        current.windowId !== group.windowId ||
+        current.pinned ||
+        anchorRuleId(current.pendingUrl || current.url || '', base) !== rule.id
+      )
+        continue
+      if (
+        live.some(
+          tab =>
+            tab.groupId === group.id &&
+            tab.windowId === group.windowId &&
+            !anchorRuleId(tab.pendingUrl || tab.url || '', base),
+        )
+      )
+        await api.tabs.remove(current.id!)
+    }
+  }
 
   function report(error: unknown) {
     retryAt = Date.now() + 5_000
@@ -101,6 +164,20 @@ export function registerPersistentGroups(
       schedule()
       return undefined
     }
+    if (target) {
+      const members = tabs.filter(
+        tab =>
+          tab.groupId === target!.id &&
+          tab.windowId === target!.windowId &&
+          !anchorRuleId(tab.pendingUrl || tab.url || '', base),
+      )
+      if (members.length) {
+        await router.rememberMembers(rule, target, members, window.incognito)
+        await removeRedundantPlaceholders(rule, target, ownTabs)
+        if (activate) await focusGroup(target)
+        return target
+      }
+    }
     let anchor = ownTabs.find(
       tab => tab.groupId === target?.id && tab.windowId === target.windowId,
     )
@@ -141,6 +218,9 @@ export function registerPersistentGroups(
       }
       if (closingWindows.has(destination) || router.startupDelay() > 0)
         return undefined
+      const appearance = !target
+        ? await router.placeholderAppearance(rule, window.incognito)
+        : undefined
       const created =
         reusable ??
         (await api.tabs.create({
@@ -202,12 +282,15 @@ export function registerPersistentGroups(
                     },
               )
         if (!target) {
-          await api.tabGroups.update(id, { title: rule.title, color: rule.color })
+          await api.tabGroups.update(id, {
+            title: appearance?.title ?? rule.title,
+            color: appearance?.color ?? rule.color,
+          })
           target = {
             id,
             windowId: destination,
-            title: rule.title,
-            color: rule.color,
+            title: appearance?.title ?? rule.title,
+            color: appearance?.color ?? rule.color,
             collapsed: false,
             shared: false,
           }
@@ -219,15 +302,7 @@ export function registerPersistentGroups(
       }
     }
     await router.bindTarget(rule, target!, window.incognito)
-    if (activate) {
-      const destination =
-        tabs.find(
-          tab => tab.groupId === target!.id && !anchorRuleId(tab.url || '', base),
-        ) ?? anchor
-      await api.tabGroups.update(target!.id, { collapsed: false })
-      await api.tabs.update(destination!.id!, { active: true })
-      await api.windows.update(target!.windowId, { focused: true })
-    }
+    if (activate) await focusGroup(target!)
     return target
   }
 
@@ -238,6 +313,7 @@ export function registerPersistentGroups(
         return
       }
       const rules = getRules().filter(rule => rule.options.keepOpen)
+      await router.pruneMemory()
       if (!rules.length) return
       const windows = (await api.windows.getAll({ windowTypes: ['normal'] })).filter(
         window => !closingWindows.has(window.id!),
@@ -334,6 +410,7 @@ export function registerPersistentGroups(
   }
 
   const onRemoved = (id: number, info: chrome.tabs.OnRemovedInfo) => {
+    membershipVersion++
     unsettledAnchors.delete(id)
     if (info.isWindowClosing) closingWindows.add(info.windowId)
     schedule()
@@ -343,6 +420,8 @@ export function registerPersistentGroups(
     schedule()
   }
   const onUpdated = (id: number, changes: chrome.tabs.OnUpdatedInfo) => {
+    if (changes.url !== undefined || changes.groupId !== undefined)
+      membershipVersion++
     if (
       (changes.groupId !== undefined && changes.groupId !== -1) ||
       (changes.url !== undefined && !anchorRuleId(changes.url, base))
@@ -355,11 +434,12 @@ export function registerPersistentGroups(
     )
       schedule()
   }
-  api.tabs.onCreated.addListener(schedule)
+  api.tabs.onCreated.addListener(changed)
   api.tabs.onRemoved.addListener(onRemoved)
   api.tabs.onUpdated.addListener(onUpdated)
-  api.tabs.onDetached.addListener(schedule)
-  api.tabs.onAttached.addListener(schedule)
+  api.tabs.onDetached.addListener(changed)
+  api.tabs.onAttached.addListener(changed)
+  api.tabGroups.onUpdated.addListener(schedule)
   api.tabGroups.onCreated.addListener(schedule)
   api.tabGroups.onRemoved.addListener(schedule)
   api.windows.onCreated.addListener(schedule)
@@ -375,11 +455,12 @@ export function registerPersistentGroups(
     dispose() {
       disposed = true
       clearTimeout(timer)
-      api.tabs.onCreated.removeListener(schedule)
+      api.tabs.onCreated.removeListener(changed)
       api.tabs.onRemoved.removeListener(onRemoved)
       api.tabs.onUpdated.removeListener(onUpdated)
-      api.tabs.onDetached.removeListener(schedule)
-      api.tabs.onAttached.removeListener(schedule)
+      api.tabs.onDetached.removeListener(changed)
+      api.tabs.onAttached.removeListener(changed)
+      api.tabGroups.onUpdated.removeListener(schedule)
       api.tabGroups.onCreated.removeListener(schedule)
       api.tabGroups.onRemoved.removeListener(schedule)
       api.windows.onCreated.removeListener(schedule)
