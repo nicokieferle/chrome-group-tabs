@@ -154,6 +154,25 @@ function harness(config = toRules([newManualGroup()])) {
     Object.assign(tabs.get(id)!, info)
     api.tabs.onUpdated.emit(id, info, { ...tabs.get(id)! })
   }
+  function closeWindow(id: number, windowFirst = false) {
+    const removeWindow = () => {
+      windows.splice(
+        windows.findIndex(window => window.id === id),
+        1,
+      )
+      api.windows.onRemoved.emit(id)
+    }
+    if (windowFirst) removeWindow()
+    for (const tab of [...tabs.values()].filter(tab => tab.windowId === id)) {
+      tabs.delete(tab.id!)
+      api.tabs.onRemoved.emit(tab.id, { windowId: id, isWindowClosing: true })
+    }
+    for (const group of [...groups].filter(group => group.windowId === id)) {
+      groups.splice(groups.indexOf(group), 1)
+      api.tabGroups.onRemoved.emit(group)
+    }
+    if (!windowFirst) removeWindow()
+  }
   const routers: ReturnType<typeof registerOnceRouter>[] = []
   const managers: ReturnType<typeof registerPersistentGroups>[] = []
   function start() {
@@ -179,6 +198,7 @@ function harness(config = toRules([newManualGroup()])) {
     localStored,
     put,
     update,
+    closeWindow,
     start,
     routers,
     managers,
@@ -956,4 +976,132 @@ it('preserves the native name and color when replacing the last normal tab with 
   expect(current.groups).toHaveLength(1)
   expect(current.groups[0]).toMatchObject({ title: 'Mein Coding', color: 'purple' })
   expect(current.tabs.size).toBe(1)
+})
+
+it.each([
+  { populated: false, windowFirst: false },
+  { populated: true, windowFirst: false },
+  { populated: false, windowFirst: true },
+  { populated: true, windowFirst: true },
+])(
+  'does not reopen groups in a surviving window after their owner closes: %j',
+  async ({ populated, windowFirst }) => {
+    current = harness(toRules([newManualGroup(), newManualGroup()]))
+    const { manager } = current.start()
+    await manager.reconcile()
+    if (populated) {
+      current.groups.forEach((group, index) =>
+        current!.put(80 + index, {
+          groupId: group.id,
+          url: `https://example.com/${index}`,
+        }),
+      )
+      await manager.reconcile()
+    }
+    const other = {
+      id: 70,
+      windowId: 2,
+      title: 'Zweitmonitor',
+      color: 'red',
+      collapsed: false,
+      shared: false,
+    } as chrome.tabGroups.TabGroup
+    current.groups.push(other)
+    const otherTab = current.put(90, {
+      groupId: other.id,
+      windowId: 2,
+      url: 'https://example.com/other',
+    })
+    current.closeWindow(1, windowFirst)
+    await vi.advanceTimersByTimeAsync(1_000)
+    await manager.idle()
+    // A later new window must not become the automatic replacement owner either.
+    current.windows.push({ id: 4, type: 'normal', incognito: false, focused: true })
+    current.api.windows.onCreated.emit({ id: 4 })
+    await manager.reconcile()
+    expect(current.groups).toEqual([other])
+    expect([...current.tabs.values()]).toEqual([otherTab])
+    expect(current.api.tabs.create).toHaveBeenCalledTimes(2)
+    expect(current.api.tabs.move).not.toHaveBeenCalled()
+    expect(current.api.windows.update).not.toHaveBeenCalled()
+  },
+)
+
+it('retains a closed owner across worker sleep until an explicit Open rebinds it', async () => {
+  current = harness()
+  let { manager, router } = current.start()
+  await manager.reconcile()
+  manager.dispose()
+  router.dispose()
+  // The worker can be asleep when Chrome closes the entire owner window.
+  current.closeWindow(1)
+  ;({ manager, router } = current.start())
+  await manager.reconcile()
+  expect(current.groups).toHaveLength(0)
+  expect(current.api.tabs.create).toHaveBeenCalledTimes(1)
+  await manager.open(current.rules[0]!.id, 2)
+  expect(current.groups[0]!.windowId).toBe(2)
+  await current.api.tabs.remove([...current.tabs.keys()][0]!)
+  await manager.reconcile()
+  expect(current.groups).toHaveLength(1)
+  expect(current.groups[0]!.windowId).toBe(2)
+  expect(current.api.tabs.create).toHaveBeenCalledTimes(3)
+})
+
+it('does not resurrect a closed persistent group through a matching new tab in another window', async () => {
+  const draft = {
+    ...newManualGroup(),
+    automatic: true,
+    patterns: 'https://example.com/*',
+  }
+  current = harness(toRules([draft]))
+  const { manager, router } = current.start()
+  await manager.reconcile()
+  current.closeWindow(1)
+  await current.api.tabs.create({ windowId: 2, url: 'https://example.com/new' })
+  await router.idle()
+  await vi.advanceTimersByTimeAsync(1_000)
+  await router.idle()
+  await manager.idle()
+  expect(current.groups).toHaveLength(0)
+  expect([...current.tabs.values()]).toMatchObject([
+    { windowId: 2, groupId: -1, url: 'https://example.com/new' },
+  ])
+  expect(current.api.tabs.group).toHaveBeenCalledTimes(1)
+  expect(current.api.tabs.create).toHaveBeenCalledTimes(2)
+})
+
+it('recovers a deliberately moved group even if its old owner closes before reconciliation', async () => {
+  current = harness()
+  const { manager } = current.start()
+  await manager.reconcile()
+  const anchor = [...current.tabs.values()][0]!
+  current.groups[0]!.id = 500
+  current.groups[0]!.windowId = 2
+  current.update(anchor.id!, { groupId: 500, windowId: 2 })
+  current.closeWindow(1)
+  await manager.reconcile()
+  await current.api.tabs.remove(anchor.id!)
+  await manager.reconcile()
+  expect(current.groups).toHaveLength(1)
+  expect(current.groups[0]).toMatchObject({ windowId: 2 })
+  expect(current.api.tabs.create).toHaveBeenCalledTimes(2)
+})
+
+it('starts persistent groups normally after a full browser restart clears the old owner', async () => {
+  current = harness()
+  let { manager, router } = current.start()
+  await manager.reconcile()
+  current.closeWindow(1)
+  manager.dispose()
+  router.dispose()
+  for (const key of Object.keys(current.stored)) delete current.stored[key]
+  ;({ manager, router } = current.start())
+  await router.ready
+  await vi.advanceTimersByTimeAsync(4_000)
+  await manager.idle()
+  await manager.reconcile()
+  expect(current.groups).toHaveLength(1)
+  expect(current.groups[0]!.windowId).toBe(2)
+  expect(current.api.tabs.create).toHaveBeenCalledTimes(2)
 })
