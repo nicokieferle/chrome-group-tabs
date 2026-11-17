@@ -1,4 +1,5 @@
 import { anchorRuleId } from './group-anchor'
+import { createGroupMemory } from './group-memory'
 import { generateMatcherRegex } from './matcher-regex'
 import type { GroupConfiguration } from './types'
 
@@ -11,7 +12,14 @@ type PendingTab = {
   initialGroupId: number
   awaitingNavigation?: boolean
 }
-type GroupBinding = { groupId: number; ruleTitle: string; windowId?: number }
+type GroupBinding = {
+  groupId: number
+  ruleTitle: string
+  windowId?: number
+  contentOnly?: boolean
+  nativeTitle?: string
+  nativeColor?: GroupConfiguration['color']
+}
 const PREFIX = 'group-once:pending:'
 const HANDLED_PREFIX = 'group-once:handled:'
 const TARGET_PREFIX = 'group-once:target:'
@@ -89,6 +97,11 @@ export function registerOnceRouter(
   const bindings = new Map<string, GroupBinding>()
   const timers = new Map<number, ReturnType<typeof setTimeout>>()
   let getGroups: () => GroupConfiguration[] = () => []
+  const memory = createGroupMemory(
+    api.storage.local,
+    api.runtime.getURL?.('group-anchor.html'),
+    () => getGroups(),
+  )
   let ready: Promise<void>
   let queue = Promise.resolve()
   let groupQueue = Promise.resolve()
@@ -193,6 +206,14 @@ export function registerOnceRouter(
         return false
       }
     }
+    const bound =
+      binding?.ruleTitle === title
+        ? groups.find(group => group.id === binding.groupId && !owners.has(group.id))
+        : undefined
+    // A deliberately removed placeholder must not transfer this binding to a
+    // leftover duplicate marker in another group during the same session.
+    if (binding?.contentOnly && bound && (await inScope(bound)))
+      return { group: bound, anchors }
     // A restored anchor outranks transient numeric IDs, titles and colors.
     for (const group of marked.sort((a, b) => a.id - b.id)) {
       if (group.id === binding?.groupId && (await inScope(group)))
@@ -204,10 +225,6 @@ export function registerOnceRouter(
     // Chrome can report the tab before its group is queryable.
     if (anchors.some(tab => tab.groupId !== -1))
       return { anchors, blocked: 'restoring' }
-    const bound =
-      binding?.ruleTitle === title
-        ? groups.find(group => group.id === binding.groupId && !owners.has(group.id))
-        : undefined
     if (bound && (await inScope(bound))) return { group: bound, anchors }
 
     const reserved = new Set(
@@ -216,11 +233,22 @@ export function registerOnceRouter(
         .map(other => bindings.get(`${TARGET_PREFIX}${other.id}${scope}`)?.groupId),
     )
     const matches = []
+    const available = []
     for (const group of groups) {
       if (owners.has(group.id) || reserved.has(group.id)) continue
+      if (await inScope(group)) available.push(group)
       if ((group.title ?? '').toLocaleLowerCase() !== title) continue
       if (!title && group.color !== rule.color) continue
       if (await inScope(group)) matches.push(group)
+    }
+    if (!window.incognito) {
+      const remembered = await memory.find(
+        rule,
+        available,
+        tabs.filter(tab => !tab.incognito),
+      )
+      if (remembered.ambiguous) return { anchors, blocked: 'ambiguous' }
+      if (remembered.group) return { group: remembered.group, anchors }
     }
     // An unmarked color or duplicated title is not an ownership signal.
     if (matches.length > 1 || (!title && matches.length))
@@ -230,20 +258,34 @@ export function registerOnceRouter(
 
   async function bindTarget(
     rule: GroupConfiguration,
-    group: Pick<chrome.tabGroups.TabGroup, 'id' | 'windowId'>,
+    group: Pick<chrome.tabGroups.TabGroup, 'id' | 'windowId'> &
+      Partial<Pick<chrome.tabGroups.TabGroup, 'title' | 'color'>>,
     incognito: boolean,
+    contentOnly?: boolean,
   ) {
     const key = `${TARGET_PREFIX}${rule.id}:${incognito ? 'private' : 'normal'}`
+    const previous = bindings.get(key)
     const binding = {
       groupId: group.id,
       ruleTitle: rule.title.toLocaleLowerCase(),
       windowId: group.windowId,
+      contentOnly:
+        contentOnly ??
+        (previous?.groupId === group.id ? previous.contentOnly : false),
+      nativeTitle:
+        group.title ??
+        (previous?.groupId === group.id ? previous.nativeTitle : undefined),
+      nativeColor:
+        group.color ??
+        (previous?.groupId === group.id ? previous.nativeColor : undefined),
     }
-    const previous = bindings.get(key)
     if (
       previous?.groupId === binding.groupId &&
       previous.ruleTitle === binding.ruleTitle &&
-      previous.windowId === binding.windowId
+      previous.windowId === binding.windowId &&
+      previous.contentOnly === binding.contentOnly &&
+      previous.nativeTitle === binding.nativeTitle &&
+      previous.nativeColor === binding.nativeColor
     )
       return
     bindings.set(key, binding)
@@ -521,6 +563,28 @@ export function registerOnceRouter(
     ready,
     findTarget,
     bindTarget,
+    rememberMembers: async (
+      rule: GroupConfiguration,
+      group: chrome.tabGroups.TabGroup,
+      tabs: chrome.tabs.Tab[],
+      incognito: boolean,
+    ) => {
+      if (!incognito) await memory.remember(rule, group, tabs)
+      await bindTarget(rule, group, incognito, true)
+    },
+    pruneMemory: memory.prune,
+    placeholderAppearance: async (rule: GroupConfiguration, incognito: boolean) => {
+      const binding = bindings.get(
+        `${TARGET_PREFIX}${rule.id}:${incognito ? 'private' : 'normal'}`,
+      )
+      if (
+        binding?.ruleTitle === rule.title.toLocaleLowerCase() &&
+        binding.nativeTitle !== undefined &&
+        binding.nativeColor
+      )
+        return { title: binding.nativeTitle, color: binding.nativeColor }
+      return incognito ? undefined : memory.appearance(rule)
+    },
     boundWindow: (id: string, incognito: boolean) =>
       bindings.get(`${TARGET_PREFIX}${id}:${incognito ? 'private' : 'normal'}`)
         ?.windowId,

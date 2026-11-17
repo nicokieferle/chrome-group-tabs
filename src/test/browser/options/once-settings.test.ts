@@ -228,6 +228,7 @@ test('renders the new icon and the group start page without horizontal overflow'
   await expect(
     page.getByRole('heading', { name: 'Gruppe ohne Namen' }),
   ).toBeVisible()
+  await expect(page.locator('.hint')).toContainText('verschwindet er automatisch')
   const icon = page.locator('main > img')
   await expect(icon).toHaveJSProperty('complete', true)
   expect(await icon.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(256)
