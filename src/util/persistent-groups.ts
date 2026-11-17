@@ -160,6 +160,16 @@ export function registerPersistentGroups(
     }
     const current = getRules().find(item => item.id === rule.id)
     if (!current || (automatic && !current.options.keepOpen)) return undefined
+    // A missing owner window is not permission to reopen in another one.
+    // Still resolve live groups above so deliberate group moves can be followed.
+    const ownerWindow = router.boundWindow(rule.id, window.incognito)
+    if (
+      automatic &&
+      !target &&
+      ownerWindow !== undefined &&
+      ownerWindow !== window.id
+    )
+      return undefined
     if (router.startupDelay() > 0) {
       schedule()
       return undefined

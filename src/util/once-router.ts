@@ -309,6 +309,18 @@ export function registerOnceRouter(
     if (window.type !== 'normal') return
     const { group: target, anchors, blocked } = await findTarget(rule, window)
     if (blocked || (!target && anchors.length)) return
+    // Keep the saved owner even after its window closes. Only an explicit Open
+    // action or a fresh browser session may reopen a persistent group elsewhere.
+    const ownerWindow = bindings.get(
+      `${TARGET_PREFIX}${rule.id}:${window.incognito ? 'private' : 'normal'}`,
+    )?.windowId
+    if (
+      !target &&
+      rule.options.keepOpen &&
+      ownerWindow !== undefined &&
+      ownerWindow !== window.id
+    )
+      return
     if (target && generation === startupGeneration && Date.now() > restoreUntil) {
       await bindTarget(rule, target, window.incognito)
     }

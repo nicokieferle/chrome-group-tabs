@@ -1,6 +1,6 @@
 export default {
   name: '__MSG_appName__',
-  version: '0.3.3',
+  version: '0.3.4',
   manifest_version: 3,
   description: '__MSG_appDesc__',
   homepage_url: 'https://github.com/nicokieferle/chrome-group-tabs',
