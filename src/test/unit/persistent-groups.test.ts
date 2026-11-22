@@ -63,6 +63,9 @@ function harness(config = toRules([newManualGroup()])) {
       }),
       group: vi.fn(async (info: any) => {
         const id = info.groupId ?? nextGroup++
+        const previousGroups = new Set<number>(
+          info.tabIds.map((tabId: number) => tabs.get(tabId)?.groupId ?? -1),
+        )
         if (info.groupId === undefined)
           groups.push({
             id,
@@ -73,6 +76,15 @@ function harness(config = toRules([newManualGroup()])) {
             shared: false,
           })
         for (const tabId of info.tabIds) update(tabId, { groupId: id })
+        for (const previous of previousGroups) {
+          if (
+            previous === id ||
+            [...tabs.values()].some(tab => tab.groupId === previous)
+          )
+            continue
+          const index = groups.findIndex(group => group.id === previous)
+          if (index >= 0) api.tabGroups.onRemoved.emit(groups.splice(index, 1)[0])
+        }
         return id
       }),
       remove: vi.fn(async (id: number) => {
@@ -150,6 +162,19 @@ function harness(config = toRules([newManualGroup()])) {
     tabs.set(id, tab)
     return tab
   }
+  function addGroup(id: number, info: Partial<chrome.tabGroups.TabGroup> = {}) {
+    const group = {
+      id,
+      windowId: 1,
+      title: '',
+      color: 'blue',
+      collapsed: false,
+      shared: false,
+      ...info,
+    } as chrome.tabGroups.TabGroup
+    groups.push(group)
+    return group
+  }
   function update(id: number, info: Partial<chrome.tabs.Tab>) {
     Object.assign(tabs.get(id)!, info)
     api.tabs.onUpdated.emit(id, info, { ...tabs.get(id)! })
@@ -197,6 +222,7 @@ function harness(config = toRules([newManualGroup()])) {
     stored,
     localStored,
     put,
+    addGroup,
     update,
     closeWindow,
     start,
@@ -320,6 +346,311 @@ it('keeps incognito destinations separate without copying groups into each regul
     1, 3,
   ])
   expect(current.api.tabs.create).toHaveBeenCalledTimes(2)
+})
+
+it('recognizes three differently colored groups including collapsed white without creating placeholders', async () => {
+  const drafts = [
+    { ...newManualGroup(), color: 'grey' as const, title: 'Weiß' },
+    { ...newManualGroup(), color: 'blue' as const, title: 'Coding' },
+    { ...newManualGroup(), color: 'green' as const, title: 'GPT' },
+  ]
+  current = harness(toRules(drafts))
+  drafts.forEach((draft, index) => {
+    current!.addGroup(71 + index, {
+      color: draft.color,
+      title: '',
+      collapsed: index === 0,
+    })
+    current!.put(81 + index, {
+      groupId: 71 + index,
+      url: `https://example.com/${index}`,
+    })
+  })
+  const { manager } = current.start()
+  await manager.reconcile()
+  await manager.reconcile()
+  expect(current.groups.map(group => group.id)).toEqual([71, 72, 73])
+  expect(current.groups[0]).toMatchObject({
+    collapsed: true,
+    title: '',
+    color: 'grey',
+  })
+  expect(current.api.tabs.create).not.toHaveBeenCalled()
+  expect(current.api.tabs.group).not.toHaveBeenCalled()
+  await current.api.tabs.remove(81)
+  await manager.reconcile()
+  expect(current.groups).toHaveLength(3)
+  expect(current.api.tabs.create).toHaveBeenCalledTimes(1)
+  expect(current.groups.find(group => group.color === 'grey')).toMatchObject({
+    windowId: 1,
+    title: '',
+  })
+})
+
+it.each([false, true])(
+  'merges a duplicate white placeholder into the existing populated group, collapsed=%s',
+  async collapsed => {
+    current = harness(
+      toRules([{ ...newManualGroup(), title: 'Weiß', color: 'grey' }]),
+    )
+    const { manager, router } = current.start()
+    await manager.reconcile()
+    const anchor = [...current.tabs.values()][0]!
+    current.addGroup(71, { color: 'grey', title: 'Meine weißen Tabs', collapsed })
+    current.put(80, { groupId: 71, url: 'https://example.com/keep' })
+    if (collapsed) {
+      const group = current.api.tabs.group.getMockImplementation()!
+      current.api.tabs.group.mockImplementationOnce(async info => {
+        const id = await group(info)
+        current!.groups.find(group => group.id === id)!.collapsed = false
+        return id
+      })
+    }
+    await manager.reconcile()
+    await manager.reconcile()
+    expect(current.groups).toEqual([
+      {
+        id: 71,
+        windowId: 1,
+        color: 'grey',
+        title: 'Meine weißen Tabs',
+        collapsed,
+        shared: false,
+      },
+    ])
+    expect([...current.tabs.values()]).toMatchObject([
+      { id: 80, groupId: 71, url: 'https://example.com/keep' },
+    ])
+    expect(current.tabs.has(anchor.id!)).toBe(false)
+    expect(current.api.tabs.remove).toHaveBeenCalledWith(anchor.id!)
+    expect(current.api.tabs.remove).not.toHaveBeenCalledWith(80)
+    expect(current.api.tabs.create).toHaveBeenCalledTimes(1)
+    expect(
+      current.stored[`group-once:target:${current.rules[0]!.id}:normal`],
+    ).toMatchObject({ groupId: 71 })
+    manager.dispose()
+    router.dispose()
+    const restarted = current.start()
+    await restarted.manager.reconcile()
+    expect(current.groups).toHaveLength(1)
+    expect(current.api.tabs.create).toHaveBeenCalledTimes(1)
+  },
+)
+
+it('combines populated groups of one unique color without losing or duplicating user tabs', async () => {
+  current = harness(toRules([{ ...newManualGroup(), title: 'Weiß', color: 'grey' }]))
+  current.addGroup(71, { color: 'grey', title: 'Vorhanden', collapsed: true })
+  current.addGroup(72, { color: 'grey', title: 'Kopie' })
+  current.put(80, { groupId: 71, url: 'https://example.com/first' })
+  current.put(81, { groupId: 72, url: 'https://example.com/second' })
+  const { manager } = current.start()
+  await manager.reconcile()
+  expect(current.groups).toHaveLength(1)
+  expect(current.groups[0]).toMatchObject({
+    id: 71,
+    title: 'Vorhanden',
+    collapsed: true,
+  })
+  expect(current.tabs.get(80)).toMatchObject({
+    groupId: 71,
+    url: 'https://example.com/first',
+  })
+  expect(current.tabs.get(81)).toMatchObject({
+    groupId: 71,
+    url: 'https://example.com/second',
+  })
+  expect(current.api.tabs.group).toHaveBeenCalledWith({ tabIds: [81], groupId: 71 })
+  expect(current.api.tabs.remove).not.toHaveBeenCalled()
+  expect(current.api.tabs.create).not.toHaveBeenCalled()
+  expect(current.api.tabs.move).not.toHaveBeenCalled()
+})
+
+it('retains just one placeholder after merging empty copies of the same configured group', async () => {
+  current = harness()
+  const rule = current.rules[0]!
+  const url = current.api.runtime.getURL(`group-anchor.html?group=${rule.id}`)
+  for (const id of [71, 72]) {
+    current.addGroup(id)
+    current.put(id, { groupId: id, url })
+  }
+  const { manager } = current.start()
+  await manager.reconcile()
+  await manager.reconcile()
+  expect(current.groups).toHaveLength(1)
+  expect(current.tabs.size).toBe(1)
+  expect([...current.tabs.values()][0]).toMatchObject({ id: 71, groupId: 71, url })
+  expect(current.api.tabs.create).not.toHaveBeenCalled()
+})
+
+it('never merges or adopts the same color from a different window after its owner closes', async () => {
+  current = harness()
+  const { manager } = current.start()
+  await manager.reconcile()
+  current.addGroup(71, { windowId: 2, collapsed: true })
+  current.put(80, { groupId: 71, windowId: 2 })
+  await manager.reconcile()
+  expect(current.groups).toHaveLength(2)
+  expect(current.tabs.get(80)).toMatchObject({ groupId: 71, windowId: 2 })
+  current.closeWindow(1)
+  await manager.reconcile()
+  expect(current.groups).toHaveLength(1)
+  expect(current.groups[0]!.id).toBe(71)
+  expect(current.api.tabs.create).toHaveBeenCalledTimes(1)
+  expect(current.api.tabs.group).toHaveBeenCalledTimes(1)
+  expect(
+    current.stored[`group-once:target:${current.rules[0]!.id}:normal`],
+  ).toMatchObject({ windowId: 1 })
+})
+
+it('keeps a group belonging to another configured rule separate even after native recoloring', async () => {
+  const drafts = [newManualGroup(), { ...newManualGroup(), color: 'green' as const }]
+  current = harness(toRules(drafts))
+  const { manager } = current.start()
+  await manager.reconcile()
+  const second = current.groups[1]!
+  second.color = 'blue'
+  current.put(80, { groupId: second.id, url: 'https://example.com/other-rule' })
+  await manager.reconcile()
+  expect(current.groups).toHaveLength(2)
+  expect(current.tabs.get(80)?.groupId).toBe(second.id)
+  expect(current.api.tabs.group).toHaveBeenCalledTimes(2)
+})
+
+it('does not merge if a group changes color during the final tab checks', async () => {
+  current = harness()
+  const { manager } = current.start()
+  await manager.reconcile()
+  const old = current.groups[0]!
+  current.addGroup(71)
+  current.put(80, { groupId: 71 })
+  const get = current.api.tabs.get.getMockImplementation()!
+  current.api.tabs.get.mockImplementationOnce(async id => {
+    old.color = 'red'
+    current!.api.tabGroups.onUpdated.emit({ ...old })
+    return get(id)
+  })
+  await manager.reconcile()
+  expect(current.groups).toHaveLength(2)
+  expect(current.api.tabs.group).toHaveBeenCalledTimes(1)
+  expect(current.api.tabs.remove).not.toHaveBeenCalled()
+})
+
+it('merges same-color private groups only inside the explicitly opened private window', async () => {
+  current = harness()
+  const { manager } = current.start()
+  await manager.reconcile()
+  await manager.open(current.rules[0]!.id, 3)
+  current.addGroup(71, { windowId: 3 })
+  current.put(80, { windowId: 3, incognito: true, groupId: 71 })
+  await manager.reconcile()
+  expect(current.groups).toHaveLength(2)
+  expect(current.groups.map(group => group.windowId).sort((a, b) => a - b)).toEqual([
+    1, 3,
+  ])
+  expect(current.tabs.get(80)).toMatchObject({ windowId: 3, groupId: 71 })
+  expect(current.api.storage.local.set).not.toHaveBeenCalled()
+  expect(current.api.tabs.move).not.toHaveBeenCalled()
+})
+
+it('requires explicit Open before adopting a named color match in a surviving window', async () => {
+  current = harness(toRules([{ ...newManualGroup(), title: 'Weiß', color: 'grey' }]))
+  const { manager } = current.start()
+  await manager.reconcile()
+  current.addGroup(71, {
+    windowId: 2,
+    title: 'Weiß',
+    color: 'grey',
+    collapsed: true,
+  })
+  current.put(80, { groupId: 71, windowId: 2 })
+  current.closeWindow(1)
+  await manager.reconcile()
+  expect(
+    current.stored[`group-once:target:${current.rules[0]!.id}:normal`],
+  ).toMatchObject({ windowId: 1 })
+  await manager.open(current.rules[0]!.id, 2)
+  expect(current.groups).toHaveLength(1)
+  expect(current.groups[0]!.id).toBe(71)
+  expect(current.api.tabs.create).toHaveBeenCalledTimes(1)
+  expect(
+    current.stored[`group-once:target:${current.rules[0]!.id}:normal`],
+  ).toMatchObject({ windowId: 2 })
+})
+
+it('does not move a page that changes windows during the final merge checks', async () => {
+  current = harness()
+  current.addGroup(71)
+  current.addGroup(72)
+  current.put(80, { groupId: 71 })
+  current.put(81, { groupId: 72 })
+  const { manager } = current.start()
+  const get = current.api.tabs.get.getMockImplementation()!
+  current.api.tabs.get.mockImplementationOnce(async id => {
+    current!.addGroup(73, { windowId: 2 })
+    current!.update(id, { groupId: 73, windowId: 2 })
+    return get(id)
+  })
+  await manager.reconcile()
+  expect(current.tabs.get(81)).toMatchObject({ groupId: 73, windowId: 2 })
+  expect(current.api.tabs.group).not.toHaveBeenCalled()
+  expect(current.api.tabs.create).not.toHaveBeenCalled()
+  expect(current.api.tabs.remove).not.toHaveBeenCalled()
+})
+
+it('does not merge after a configuration edit makes the color ambiguous', async () => {
+  current = harness()
+  current.addGroup(71)
+  current.addGroup(72)
+  current.put(80, { groupId: 71 })
+  current.put(81, { groupId: 72 })
+  const { manager } = current.start()
+  const get = current.api.tabs.get.getMockImplementation()!
+  current.api.tabs.get.mockImplementationOnce(async id => {
+    current!.setRules([...current!.rules, ...toRules([newManualGroup()])])
+    return get(id)
+  })
+  await manager.reconcile()
+  expect(current.groups).toHaveLength(2)
+  expect(current.api.tabs.group).not.toHaveBeenCalled()
+  expect(current.api.tabs.remove).not.toHaveBeenCalled()
+})
+
+it('retains split views rather than moving their tabs during color consolidation', async () => {
+  current = harness()
+  current.addGroup(71)
+  current.addGroup(72)
+  current.put(80, { groupId: 71 })
+  current.put(81, { groupId: 72, splitViewId: 1 })
+  const { manager } = current.start()
+  await manager.reconcile()
+  expect(current.tabs.get(81)).toMatchObject({ groupId: 72, splitViewId: 1 })
+  expect(current.api.tabs.group).not.toHaveBeenCalled()
+  expect(current.api.tabs.create).not.toHaveBeenCalled()
+})
+
+it('retries a failed color merge without closing pages or creating another placeholder', async () => {
+  current = harness()
+  const { manager } = current.start()
+  await manager.reconcile()
+  const anchor = [...current.tabs.keys()][0]!
+  current.addGroup(71)
+  current.put(80, { groupId: 71 })
+  current.api.tabs.group.mockRejectedValueOnce(new Error('Group is busy'))
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    await manager.reconcile()
+    expect(current.groups).toHaveLength(2)
+    expect(current.tabs.has(anchor)).toBe(true)
+    expect(current.tabs.has(80)).toBe(true)
+    expect(current.api.tabs.create).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(5_500)
+    await manager.idle()
+    expect(current.groups).toHaveLength(1)
+    expect([...current.tabs.keys()]).toEqual([80])
+    expect(current.api.tabs.create).toHaveBeenCalledTimes(1)
+  } finally {
+    log.mockRestore()
+  }
 })
 
 it('does not create group copies while browser restoration or anchor attachment is pending', async () => {
@@ -595,7 +926,7 @@ it('gives the restored marker priority over a stale binding and groups with iden
   expect(current.groups).toHaveLength(2)
 })
 
-it('does not adopt or duplicate an unmarked unnamed group based on color alone', async () => {
+it('adopts an unmarked unnamed group when its color identifies one configured rule', async () => {
   current = harness()
   current.groups.push({
     id: 71,
@@ -611,6 +942,9 @@ it('does not adopt or duplicate an unmarked unnamed group based on color alone',
   expect(current.groups).toHaveLength(1)
   expect(current.tabs.get(61)?.groupId).toBe(71)
   expect(current.api.tabs.create).not.toHaveBeenCalled()
+  expect(
+    current.stored[`group-once:target:${current.rules[0]!.id}:normal`],
+  ).toMatchObject({ groupId: 71 })
 })
 
 it('does not let continuous events postpone reopening a persistent group', async () => {
