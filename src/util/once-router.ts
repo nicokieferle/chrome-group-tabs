@@ -157,10 +157,56 @@ export function registerOnceRouter(
     })
   }
 
+  function matchingColorGroups(
+    rule: GroupConfiguration,
+    target: Pick<chrome.tabGroups.TabGroup, 'windowId' | 'color'> & { id?: number },
+    snapshot: { groups: chrome.tabGroups.TabGroup[]; tabs: chrome.tabs.Tab[] },
+  ) {
+    // Keep automatic-only rules unchanged. Persistent colors identify a group
+    // only when exactly one configured rule uses them.
+    if (
+      !rule.options.keepOpen ||
+      getGroups().some(other => other.id !== rule.id && other.color === target.color)
+    )
+      return []
+    const reserved = new Set(
+      [...bindings.entries()]
+        .filter(([key]) => !key.startsWith(`${TARGET_PREFIX}${rule.id}:`))
+        .map(([, binding]) => binding.groupId),
+    )
+    const base = api.runtime.getURL?.('group-anchor.html')
+    for (const tab of snapshot.tabs) {
+      const owner = anchorRuleId(tab.pendingUrl || tab.url || '', base)
+      if (owner && owner !== rule.id) reserved.add(tab.groupId)
+    }
+    const hasPages = (group: chrome.tabGroups.TabGroup) =>
+      snapshot.tabs.some(
+        tab =>
+          tab.groupId === group.id &&
+          tab.windowId === group.windowId &&
+          !anchorRuleId(tab.pendingUrl || tab.url || '', base),
+      )
+    return snapshot.groups
+      .filter(
+        group =>
+          group.windowId === target.windowId &&
+          group.color === target.color &&
+          !group.shared &&
+          !reserved.has(group.id),
+      )
+      .sort(
+        (a, b) =>
+          Number(hasPages(b)) - Number(hasPages(a)) ||
+          Number(b.id === target.id) - Number(a.id === target.id) ||
+          a.id - b.id,
+      )
+  }
+
   async function findTarget(
     rule: GroupConfiguration,
     window: chrome.windows.Window,
     snapshot?: { groups: chrome.tabGroups.TabGroup[]; tabs: chrome.tabs.Tab[] },
+    explicitOpen = false,
   ): Promise<{
     group?: chrome.tabGroups.TabGroup
     anchors: chrome.tabs.Tab[]
@@ -237,20 +283,39 @@ export function registerOnceRouter(
     for (const group of groups) {
       if (owners.has(group.id) || reserved.has(group.id)) continue
       if (await inScope(group)) available.push(group)
+      if (
+        rule.options.keepOpen &&
+        !explicitOpen &&
+        binding?.windowId !== undefined &&
+        group.windowId !== binding.windowId
+      )
+        continue
       if ((group.title ?? '').toLocaleLowerCase() !== title) continue
       if (!title && group.color !== rule.color) continue
       if (await inScope(group)) matches.push(group)
     }
+    let remembered: Awaited<ReturnType<typeof memory.find>> = {}
     if (!window.incognito) {
-      const remembered = await memory.find(
+      remembered = await memory.find(
         rule,
         available,
         tabs.filter(tab => !tab.incognito),
       )
-      if (remembered.ambiguous) return { anchors, blocked: 'ambiguous' }
       if (remembered.group) return { group: remembered.group, anchors }
     }
-    // An unmarked color or duplicated title is not an ownership signal.
+    // Reuse collapsed and renamed groups before creating a placeholder. Never
+    // transfer a saved owner to another window merely because its window closed.
+    const colorMatches = matchingColorGroups(
+      rule,
+      {
+        windowId: explicitOpen ? window.id! : (binding?.windowId ?? window.id!),
+        color: rule.color,
+      },
+      { groups: available, tabs },
+    )
+    if (colorMatches.length) return { group: colorMatches[0], anchors }
+    if (remembered.ambiguous) return { anchors, blocked: 'ambiguous' }
+    // Shared configuration colors still require the existing identity checks.
     if (matches.length > 1 || (!title && matches.length))
       return { anchors, blocked: 'ambiguous' }
     return { group: matches[0], anchors }
@@ -575,6 +640,7 @@ export function registerOnceRouter(
     ready,
     findTarget,
     bindTarget,
+    matchingColorGroups,
     rememberMembers: async (
       rule: GroupConfiguration,
       group: chrome.tabGroups.TabGroup,

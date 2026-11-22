@@ -14,6 +14,7 @@ type Router = Pick<
   | 'rememberMembers'
   | 'pruneMemory'
   | 'placeholderAppearance'
+  | 'matchingColorGroups'
 >
 
 export function registerPersistentGroups(
@@ -79,16 +80,122 @@ export function registerPersistentGroups(
         anchorRuleId(current.pendingUrl || current.url || '', base) !== rule.id
       )
         continue
-      if (
-        live.some(
+      const hasPages = live.some(
+        tab =>
+          tab.groupId === group.id &&
+          tab.windowId === group.windowId &&
+          !anchorRuleId(tab.pendingUrl || tab.url || '', base),
+      )
+      const placeholders = live
+        .filter(
           tab =>
             tab.groupId === group.id &&
             tab.windowId === group.windowId &&
-            !anchorRuleId(tab.pendingUrl || tab.url || '', base),
+            !tab.pinned &&
+            anchorRuleId(tab.pendingUrl || tab.url || '', base) === rule.id,
         )
+        .sort((a, b) => a.id! - b.id!)
+      if (
+        hasPages ||
+        (placeholders.length > 1 && current.id !== placeholders[0]!.id)
       )
         await api.tabs.remove(current.id!)
     }
+  }
+
+  async function mergeMatchingColorGroups(
+    rule: GroupConfiguration,
+    target: chrome.tabGroups.TabGroup,
+    snapshot: { groups: chrome.tabGroups.TabGroup[]; tabs: chrome.tabs.Tab[] },
+    automatic: boolean,
+  ) {
+    let choices = router.matchingColorGroups(rule, target, snapshot)
+    if (choices.length < 2 || !choices.some(group => group.id === target.id))
+      return { group: target, tabs: snapshot.tabs }
+    // Prefer the group with real pages to a duplicate placeholder-only group.
+    const fresh = {
+      groups: await api.tabGroups.query({}),
+      tabs: await api.tabs.query({}),
+    }
+    const liveTarget = fresh.groups.find(group => group.id === target.id)
+    if (
+      !liveTarget ||
+      liveTarget.windowId !== target.windowId ||
+      liveTarget.color !== target.color
+    ) {
+      schedule()
+      return undefined
+    }
+    choices = router.matchingColorGroups(rule, liveTarget, fresh)
+    if (!choices.some(group => group.id === liveTarget.id)) return undefined
+    const destination = choices[0]!
+    for (const source of choices.slice(1)) {
+      const version = membershipVersion
+      const [groups, tabs] = await Promise.all([
+        api.tabGroups.query({}),
+        api.tabs.query({}),
+      ])
+      const allowed = router.matchingColorGroups(rule, destination, { groups, tabs })
+      if (!allowed.some(group => group.id === destination.id)) return undefined
+      if (!allowed.some(group => group.id === source.id)) continue
+      const members = tabs.filter(
+        tab => tab.groupId === source.id && tab.windowId === destination.windowId,
+      )
+      if (!members.length) continue
+      if (
+        members.some(
+          tab =>
+            tab.pinned || (tab.splitViewId !== undefined && tab.splitViewId !== -1),
+        )
+      )
+        continue
+      const latest = await Promise.all(
+        members.map(tab => api.tabs.get(tab.id!).catch(() => undefined)),
+      )
+      const current = getRules().find(item => item.id === rule.id)
+      const finalAllowed = new Set(
+        router
+          .matchingColorGroups(rule, destination, { groups, tabs })
+          .map(group => group.id),
+      )
+      if (
+        version !== membershipVersion ||
+        !current ||
+        !finalAllowed.has(destination.id) ||
+        !finalAllowed.has(source.id) ||
+        (automatic && !current.options.keepOpen) ||
+        closingWindows.has(destination.windowId) ||
+        router.startupDelay() > 0 ||
+        latest.some(
+          tab =>
+            !tab ||
+            tab.groupId !== source.id ||
+            tab.windowId !== destination.windowId ||
+            tab.pinned ||
+            (tab.splitViewId !== undefined && tab.splitViewId !== -1),
+        )
+      ) {
+        schedule()
+        return undefined
+      }
+      await api.tabs.group({
+        tabIds: [latest[0]!.id!, ...latest.slice(1).map(tab => tab!.id!)],
+        groupId: destination.id,
+      })
+    }
+    const [groups, tabs] = await Promise.all([
+      api.tabGroups.query({}),
+      api.tabs.query({}),
+    ])
+    const group = groups.find(
+      group =>
+        group.id === destination.id && group.windowId === destination.windowId,
+    )
+    if (group && group.collapsed !== destination.collapsed) {
+      await api.tabGroups.update(group.id, { collapsed: destination.collapsed })
+      group.collapsed = destination.collapsed
+    }
+    return group ? { group, tabs } : undefined
   }
 
   function report(error: unknown) {
@@ -135,12 +242,17 @@ export function registerPersistentGroups(
     activate: boolean,
     automatic: boolean,
   ) {
-    const [groups, tabs] = await Promise.all([
+    let [groups, tabs] = await Promise.all([
       api.tabGroups.query({}),
       api.tabs.query({}),
     ])
-    const resolution = await router.findTarget(rule, window, { groups, tabs })
-    const ownTabs = resolution.anchors
+    const resolution = await router.findTarget(
+      rule,
+      window,
+      { groups, tabs },
+      activate,
+    )
+    let ownTabs = resolution.anchors
     if (resolution.blocked) {
       if (activate && resolution.blocked === 'ambiguous')
         throw new Error(
@@ -175,6 +287,20 @@ export function registerPersistentGroups(
       return undefined
     }
     if (target) {
+      const merged = await mergeMatchingColorGroups(
+        rule,
+        target,
+        { groups, tabs },
+        automatic,
+      )
+      if (!merged) return undefined
+      target = merged.group
+      tabs = merged.tabs
+      ownTabs = tabs.filter(
+        tab =>
+          tab.incognito === window.incognito &&
+          anchorRuleId(tab.pendingUrl || tab.url || '', base) === rule.id,
+      )
       const members = tabs.filter(
         tab =>
           tab.groupId === target!.id &&
@@ -312,6 +438,7 @@ export function registerPersistentGroups(
       }
     }
     await router.bindTarget(rule, target!, window.incognito)
+    await removeRedundantPlaceholders(rule, target!, ownTabs)
     if (activate) await focusGroup(target!)
     return target
   }
@@ -449,7 +576,7 @@ export function registerPersistentGroups(
   api.tabs.onUpdated.addListener(onUpdated)
   api.tabs.onDetached.addListener(changed)
   api.tabs.onAttached.addListener(changed)
-  api.tabGroups.onUpdated.addListener(schedule)
+  api.tabGroups.onUpdated.addListener(changed)
   api.tabGroups.onCreated.addListener(schedule)
   api.tabGroups.onRemoved.addListener(schedule)
   api.windows.onCreated.addListener(schedule)
@@ -470,7 +597,7 @@ export function registerPersistentGroups(
       api.tabs.onUpdated.removeListener(onUpdated)
       api.tabs.onDetached.removeListener(changed)
       api.tabs.onAttached.removeListener(changed)
-      api.tabGroups.onUpdated.removeListener(schedule)
+      api.tabGroups.onUpdated.removeListener(changed)
       api.tabGroups.onCreated.removeListener(schedule)
       api.tabGroups.onRemoved.removeListener(schedule)
       api.windows.onCreated.removeListener(schedule)
